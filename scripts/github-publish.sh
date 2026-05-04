@@ -37,8 +37,11 @@ if git remote | grep -q '^origin$'; then
 else
   echo ""
   echo "Creating a new PRIVATE repo on GitHub and pushing..."
-  read -rp "Repo name [mnn-clip-namer]: " REPO_NAME
-  REPO_NAME=${REPO_NAME:-mnn-clip-namer}
+  REPO_NAME="${GITHUB_REPO_NAME:-}"
+  if [[ -z "$REPO_NAME" ]]; then
+    read -rp "Repo name [mnn-clip-namer]: " REPO_NAME
+    REPO_NAME=${REPO_NAME:-mnn-clip-namer}
+  fi
   gh repo create "$REPO_NAME" --private --source=. --remote=origin --push \
     --description "MNN Clip Namer — AI-powered video clip renaming (Electron)"
 fi

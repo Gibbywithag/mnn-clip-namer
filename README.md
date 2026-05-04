@@ -58,6 +58,12 @@ chmod +x scripts/github-publish.sh
 
 The script logs you into GitHub in the browser (first time only), creates a **private** repo, pushes this source tree, and attaches **`release/MNN Clip Namer Setup <version>.exe`** to **Releases**.
 
+Optional — skip the repo-name prompt:
+
+```bash
+GITHUB_REPO_NAME=my-org-mnn-clip-namer ./scripts/github-publish.sh
+```
+
 On your work laptop: open the repo in the browser → **Releases** → download the `.exe`.
 
 > **Privacy:** `electron/services/buildConfig.ts` contains your Worker URL and shared client secret baked into installers. Treat the repo as **private** unless you rotate those values.
