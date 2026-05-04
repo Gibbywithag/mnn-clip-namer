@@ -109,6 +109,7 @@ export interface MnnApi {
   applyRenames(jobs: RenameJob[]): Promise<RenameResult[]>;
   undoLast(): Promise<number>;
   exportCsv(clips: Clip[]): Promise<string | null>;
+  pickFolder(): Promise<string | null>;
 
   // Events
   onClipUpdate(cb: (clip: Clip) => void): () => void;

@@ -23,6 +23,7 @@ const api: MnnApi = {
     >,
   undoLast: () => ipcRenderer.invoke('rename:undo') as Promise<number>,
   exportCsv: (clips) => ipcRenderer.invoke('export:csv', clips) as Promise<string | null>,
+  pickFolder: () => ipcRenderer.invoke('dialog:pickFolder') as Promise<string | null>,
 
   // Events
   onClipUpdate: (cb) => {

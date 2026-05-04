@@ -62,6 +62,7 @@ export default function SettingsPanel({ settings, onClose, onSaved }: Props) {
         concurrency: local.concurrency,
         template: local.template,
         outputMode: local.outputMode,
+        copyFolder: local.copyFolder,
       });
       onSaved(saved);
       onClose();
@@ -212,6 +213,34 @@ export default function SettingsPanel({ settings, onClose, onSaved }: Props) {
             <option value="copy-to-folder">Copy to output folder (keep originals)</option>
           </select>
         </div>
+
+        {local.outputMode === 'copy-to-folder' && (
+          <div className="row">
+            <label>Output folder</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                type="text"
+                value={local.copyFolder ?? ''}
+                placeholder="No folder selected — click Browse"
+                onChange={(e) => setLocal({ ...local, copyFolder: e.target.value })}
+              />
+              <button
+                style={{ flexShrink: 0 }}
+                onClick={async () => {
+                  const picked = await window.mnn.pickFolder();
+                  if (picked) setLocal({ ...local, copyFolder: picked });
+                }}
+              >
+                Browse…
+              </button>
+            </div>
+            <div className="hint">
+              Renamed copies are written here. The original files in their source folders
+              are left untouched. Tip: point this at the broll-archive watched folder for
+              automatic indexing.
+            </div>
+          </div>
+        )}
 
         <div className="modal-actions">
           <button className="ghost" onClick={onClose} disabled={saving}>

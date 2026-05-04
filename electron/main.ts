@@ -241,6 +241,15 @@ ipcMain.handle('rename:apply', async (_e, jobs: RenameJob[]) => {
 
 ipcMain.handle('rename:undo', async () => undoLast());
 
+ipcMain.handle('dialog:pickFolder', async (): Promise<string | null> => {
+  const result = await dialog.showOpenDialog({
+    title: 'Choose output folder',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
 ipcMain.handle('export:csv', async (_e, clips: Clip[]) => {
   const result = await dialog.showSaveDialog({
     title: 'Export rename map',
