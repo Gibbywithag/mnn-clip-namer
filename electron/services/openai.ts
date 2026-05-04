@@ -26,19 +26,49 @@ const MAX_TOTAL_RETRY_MS = 90_000;
 const OPENAI_MODEL = 'gpt-4o-mini';
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 
-const SYSTEM_INSTRUCTION = `You generate concise, descriptive filenames for video clips.
+const SYSTEM_INSTRUCTION = `You generate concise, distinctive filenames for video clips.
 You will receive N keyframes sampled evenly across a clip, plus technical metadata.
 Return strictly valid JSON matching the provided schema.
 
-Rules for each field:
-- subject: the most specific label for the main action, role, object, or moment — 1 to 3 short words, hyphen-separated, lowercase. Prefer concrete nouns (who is doing what): e.g. "mayor-budget-speech", "chef-knife-skills", "goal-celebration-replay" — not vague labels like "meeting" or "sports" alone.
-- technique: the recording technique or shot type — 1 to 2 words, lowercase (e.g. "wide-shot", "handheld", "timelapse", "drone", "closeup", "interview", "bts").
-- setting: the environment or location context — 1 to 3 words, hyphen-separated, lowercase. Name recognizable venue or geography when visible (e.g. "city-hall-steps", "home-kitchen-counter", "highway-overpass-sunset") — not just "indoors" or "outside".
-- confidence: "high" if the frames clearly show the content, "medium" if you inferred some parts, "low" if mostly guessing.
-- notes: optional — only include if the content is ambiguous or important context is missing.
+Guiding principle: the proposed name must be specific enough to distinguish THIS clip
+from 100 visually similar clips on the same drive. Generic, reusable names are wrong.
 
-Use visible cues when possible: uniforms, signage, logos, on-screen text, distinctive architecture, or props. Be specific. Avoid generic fallbacks like "person-walking-outside", "video-clip-footage", or "people-talking".
-Never include spaces, underscores, or punctuation other than hyphens. Never include file extensions.`;
+Rules for each field:
+- subject: 2 to 3 short words, hyphen-separated, lowercase. Follow [actor]-[action] or
+  [object]-[state] when humans are visible: "mayor-budget-speech", "chef-plating-dish",
+  "goalie-saves-shot", "ribbon-cutting-ceremony", "fans-rushing-field". For non-human
+  subjects, prefer [thing]-[notable-quality]: "skyline-night-traffic",
+  "harvest-pumpkin-display", "construction-crane-lift". Avoid bare 1-word subjects unless
+  they are a distinctive proper noun (e.g. "granicus", a brand name visible on screen).
+- technique: 1 to 2 words, lowercase. One of: "wide-shot", "closeup", "medium-shot",
+  "handheld", "tripod-locked", "tracking", "dolly", "drone-aerial", "timelapse", "slowmo",
+  "interview", "podium-mounted", "bts" (behind-the-scenes), "broll", "static",
+  "selfie-facing", "over-shoulder".
+- setting: 2 to 3 words, hyphen-separated, lowercase. Name a recognizable venue,
+  neighborhood, or geographic feature when visible: "city-hall-steps", "home-kitchen-counter",
+  "highway-overpass-sunset", "stadium-end-zone", "school-gym-floor", "downtown-storefront".
+  Do not use bare "indoors", "outdoors", "park", "office", "studio" — always pair with a
+  qualifier. If the location is genuinely unidentifiable, use the dominant visual feature
+  ("brick-wall-mural", "tree-lined-street", "open-water-horizon").
+- confidence: "high" if the frames clearly show what each field describes, "medium" if you
+  inferred some parts, "low" if mostly guessing.
+- notes: empty string unless the clip is ambiguous or you spotted something important the
+  user might want to know (e.g. "no audio cues — names guessed from jersey colors").
+
+Method:
+1. Read EVERY piece of visible text first: chyron lower-thirds, scoreboards, banners,
+   signs, jerseys, name plates, on-screen graphics, logos. Names of people, places, and
+   events from text are gold — use them.
+2. Identify the single most distinctive element in the frames and put it in "subject".
+3. Use uniforms, props, architecture, time-of-day, and weather as setting cues.
+4. Drop filler words: "the", "a", "and", "of", "in", "with", "at".
+
+Forbidden in any field (these are all too generic when used alone):
+"people", "person", "video", "clip", "footage", "scene", "shot", "moment", "thing",
+"stuff", "view", "general", "various", "misc". They may appear only as part of a
+specific compound (e.g. "wide-shot" is fine because "wide" qualifies it).
+
+Never include spaces, underscores, file extensions, or any punctuation other than hyphens.`;
 
 /**
  * JSON Schema for OpenAI Structured Outputs. `strict: true` means the model is
@@ -322,7 +352,9 @@ async function analyzeViaDirect(
       },
       body: JSON.stringify({
         model: OPENAI_MODEL,
-        temperature: 0.3,
+        // Low temperature pushes the model toward the most-supported, specific name
+        // rather than creative variants. Repeated runs on the same clip will be stable.
+        temperature: 0.2,
         messages,
         response_format: {
           type: 'json_schema',
