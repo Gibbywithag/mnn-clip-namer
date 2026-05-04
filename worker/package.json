@@ -1,0 +1,16 @@
+{
+  "name": "mnn-clip-namer-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker that proxies Gemini 2.0 Flash requests for the MNN Clip Namer app.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "typescript": "^5.6.2",
+    "wrangler": "^3.80.0"
+  }
+}

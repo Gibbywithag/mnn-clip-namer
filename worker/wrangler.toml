@@ -1,0 +1,18 @@
+name = "mnn-clip-namer"
+main = "src/index.ts"
+compatibility_date = "2025-01-10"
+
+# After deploy, set these secrets from the command line:
+#   wrangler secret put OPENAI_API_KEY
+#   wrangler secret put SHARED_SECRET
+#
+# The SHARED_SECRET value must match CLIENT_SHARED_SECRET baked into the Electron app.
+# See ../BUILD_CONFIG.md.
+
+# Optional: enable a built-in rate limiter so no single IP can burn your OpenAI quota.
+# Uncomment and adjust as needed (requires a paid Workers plan if you exceed free tier).
+# [[unsafe.bindings]]
+# name = "RATE_LIMITER"
+# type = "ratelimit"
+# namespace_id = "1001"
+# simple = { limit = 30, period = 60 }   # 30 requests per 60s per key
