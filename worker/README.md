@@ -85,7 +85,7 @@ End users download the installer, open it, drop clips. Zero config.
 
 **OpenAI `gpt-4o-mini` (vision):**
 - $0.15 per 1M input tokens, $0.60 per 1M output tokens
-- ~$0.001 per clip with 4 keyframes at `detail: low` (~$1 per 1,000 clips)
+- Uses higher-detail frames so OpenAI can read signs, lower-thirds, storefronts, and room labels more reliably.
 - Tier 1 (default after first payment): 500 RPM, 200K TPM — effectively unlimited for clip naming
 
 ## Abuse protection

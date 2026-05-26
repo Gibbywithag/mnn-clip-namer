@@ -7,18 +7,23 @@ interface Props {
 }
 
 export default function Toast({ msg, action, onClose }: Props) {
+  const lifeMs = action ? 7000 : 4000;
   useEffect(() => {
-    const t = setTimeout(onClose, action ? 7000 : 4000);
+    const t = setTimeout(onClose, lifeMs);
     return () => clearTimeout(t);
-  }, [onClose, action]);
+  }, [onClose, lifeMs]);
 
   return (
-    <div className="toast" role="status">
+    <div
+      className="toast"
+      role="status"
+      style={{ ['--toast-life' as unknown as string]: `${lifeMs}ms` } as React.CSSProperties}
+    >
       <span>{msg}</span>
       {action && (
         <button
           className="ghost"
-          style={{ padding: '4px 10px', fontSize: 12 }}
+          style={{ padding: '4px 10px', fontSize: 10, letterSpacing: '0.16em' }}
           onClick={() => {
             action.onClick();
             onClose();
@@ -28,12 +33,13 @@ export default function Toast({ msg, action, onClose }: Props) {
         </button>
       )}
       <button
-        className="ghost"
-        style={{ padding: '4px 8px', fontSize: 12 }}
+        className="icon-button"
         onClick={onClose}
         aria-label="Close"
       >
-        ✕
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="m5.75 5.75 8.5 8.5M14.25 5.75l-8.5 8.5" />
+        </svg>
       </button>
     </div>
   );

@@ -1,10 +1,14 @@
 import type { ClipMetadata, NameParts, Settings } from '../../shared/types';
+import { ANALYSIS_MODELS } from '../../shared/types';
 import { CLIENT_SHARED_SECRET } from './buildConfig';
+import { resolveLocation, resolveLocationFromGps } from './geocoder';
+import { monitorError, monitorWarn } from './monitorLog';
 
 interface AnalyzeArgs {
   frames: Buffer[];
   metadata: ClipMetadata;
   settings: Settings;
+  originalName?: string;
   apiKey?: string | null;
   /**
    * Optional progress hook the caller can use to surface intermediate state
@@ -14,17 +18,23 @@ interface AnalyzeArgs {
 }
 
 /**
- * Hard cap on total retry/wait time per clip. Beyond this we give up and let
- * the user click ↻ themselves rather than spending minutes silently looking
- * "analyzing" while a quota is exhausted.
+ * Hard cap on total retry/wait time per clip. Big batches can legitimately
+ * need to sit through a rate-limit window, but we still avoid hanging forever.
  */
-const MAX_TOTAL_RETRY_MS = 90_000;
+const MAX_TOTAL_RETRY_MS = 180_000;
 
-// gpt-4o-mini supports vision + structured outputs (json_schema) and is the
-// cheapest tier-suitable vision model: $0.15/M input, $0.60/M output.
-// Tier-1 limits are 500 RPM / 200K TPM — effectively unlimited for clip naming.
-const OPENAI_MODEL = 'gpt-4o-mini';
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
+
+function resolveOpenAiModel(settings: Settings): string {
+  const m = settings.analysisModel;
+  return (ANALYSIS_MODELS as readonly string[]).includes(m) ? m : 'gpt-4o-mini';
+}
+
+function resolveRequestGapMs(settings: Settings): number {
+  const n = Number(settings.requestGapMs);
+  if (!Number.isFinite(n)) return 5000;
+  return Math.max(2000, Math.min(60_000, Math.round(n)));
+}
 
 const SYSTEM_INSTRUCTION = `You generate concise, distinctive filenames for video clips.
 You will receive N keyframes sampled evenly across a clip, plus technical metadata.
@@ -40,6 +50,11 @@ Rules for each field:
   subjects, prefer [thing]-[notable-quality]: "skyline-night-traffic",
   "harvest-pumpkin-display", "construction-crane-lift". Avoid bare 1-word subjects unless
   they are a distinctive proper noun (e.g. "granicus", a brand name visible on screen).
+  If a title card, lower-third, agenda slide, caption, or readable graphic identifies the
+  event/topic/person, prefer that over generic visual descriptions like "person-speaking".
+  If the original filename contains a meaningful event label that matches the frames, use it
+  as a clue (e.g. "Ribbon Cutting Full.MOV" should become "ribbon-cutting-ceremony", not
+  "group-photo-event").
 - technique: 1 to 2 words, lowercase. One of: "wide-shot", "closeup", "medium-shot",
   "handheld", "tripod-locked", "tracking", "dolly", "drone-aerial", "timelapse", "slowmo",
   "interview", "podium-mounted", "bts" (behind-the-scenes), "broll", "static",
@@ -47,21 +62,58 @@ Rules for each field:
 - setting: 2 to 3 words, hyphen-separated, lowercase. Name a recognizable venue,
   neighborhood, or geographic feature when visible: "city-hall-steps", "home-kitchen-counter",
   "highway-overpass-sunset", "stadium-end-zone", "school-gym-floor", "downtown-storefront".
+  If on-screen text, signage, a podium seal, a wall plaque, a map label, a logo, or a room
+  label identifies the location or organization, use that clue before generic scenery.
   Do not use bare "indoors", "outdoors", "park", "office", "studio" — always pair with a
   qualifier. If the location is genuinely unidentifiable, use the dominant visual feature
   ("brick-wall-mural", "tree-lined-street", "open-water-horizon").
 - confidence: "high" if the frames clearly show what each field describes, "medium" if you
   inferred some parts, "low" if mostly guessing.
-- notes: empty string unless the clip is ambiguous or you spotted something important the
-  user might want to know (e.g. "no audio cues — names guessed from jersey colors").
+- notes: empty string unless the clip is ambiguous or you spotted an important cue the
+  user might want to know (e.g. "used lower-third: budget hearing" or
+  "signage partially readable").
+- locationHint: Write the most specific location identifier you can extract. Priority:
+  (1) If you recognize a specific named place, use its official name (e.g. "Centennial
+  Park", "Nissan Stadium", "Metro Nashville Courthouse", "Germantown", "Music Row").
+  (2) If you see street signs, addresses, or partial names, write those (e.g. "Second
+  Avenue North downtown", "Church Street and Fifth Avenue").
+  (3) If you cannot name the specific place, describe the BUILDING OR LOCATION ITSELF
+  in detail — its architecture, materials, age, and physical features — NOT the
+  activity happening in front of it. For a demolition scene: describe the building being
+  demolished ("historic multi-story arched brick building Second Avenue downtown"), NOT
+  the crane or the workers. For a park: describe the landscaping and structures. For a
+  mural: describe the artwork. Include street or neighborhood cues if visible.
+  IMPORTANT: if you recognize the location from a known news event, landmark, or history
+  (e.g. a bombing site, disaster aftermath, famous venue), mention that event — e.g.
+  "Nashville Christmas bombing Second Avenue demolition site" is far more useful than
+  "downtown construction site".
+  Empty string ONLY if there are zero location cues: featureless solid-color backdrop,
+  black screen, or completely generic indoor space with no windows or signage.
 
 Method:
-1. Read EVERY piece of visible text first: chyron lower-thirds, scoreboards, banners,
-   signs, jerseys, name plates, on-screen graphics, logos. Names of people, places, and
-   events from text are gold — use them.
-2. Identify the single most distinctive element in the frames and put it in "subject".
-3. Use uniforms, props, architecture, time-of-day, and weather as setting cues.
-4. Drop filler words: "the", "a", "and", "of", "in", "with", "at".
+1. Scan frames earliest-to-latest for in-video cues: title cards, agenda slides, chyron
+   lower-thirds, captions, scoreboards, banners, signs, jerseys, name plates, podium seals,
+   wall plaques, room labels, maps, logos, watermarks, and on-screen graphics.
+2. Treat readable cue text as primary evidence for what the clip is and where it is. Names
+   of people, places, organizations, programs, events, committees, schools, teams, venues,
+   streets, neighborhoods, and dates are gold. Use the most reliable distinctive words.
+3. Use the original filename as secondary context when it describes the clip, but ignore
+   production/status words like "full", "final", "edited", "clip", "video", "copy", "new",
+   and camera/card numbers.
+4. If a cue conflicts with a generic visual guess, trust the cue. For example, a generic
+   meeting room with a "Metro Nashville Council" lower-third should become something like
+   "metro-council-meeting" in subject and "nashville-council-chambers" in setting.
+5. Never use vague fallback names such as "group-photo-event", "office-reception-area",
+   "people-gathering", "indoor-event", "outdoor-event", "public-event", or
+   "community-event" when a more specific cue or filename clue exists.
+6. Identify the single most distinctive event, person, object, or action and put it in
+   "subject"; fold the best cue-derived location/organization into "setting".
+7. Use uniforms, props, architecture, time-of-day, and weather as secondary setting cues.
+8. If cue text is partially readable, only use words you can read with confidence and note
+   the uncertainty in "notes".
+9. When subject or setting comes from readable on-screen text, echo the shortest verbatim
+   cue in "notes" (e.g. "cue: METRO COUNCIL") so the user can verify without guessing.
+10. Drop filler words: "the", "a", "and", "of", "in", "with", "at".
 
 Forbidden in any field (these are all too generic when used alone):
 "people", "person", "video", "clip", "footage", "scene", "shot", "moment", "thing",
@@ -84,11 +136,23 @@ const RESPONSE_SCHEMA = {
     setting: { type: 'string' },
     confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
     notes: { type: 'string' },
+    locationHint: { type: 'string' },
   },
-  // OpenAI strict mode requires every key to be in `required`. `notes` is
-  // optional in spirit, so we let the model emit an empty string for it.
-  required: ['subject', 'technique', 'setting', 'confidence', 'notes'],
+  // OpenAI strict mode requires every key to be in `required`. Optional fields
+  // get an empty string when the model has nothing to say.
+  required: ['subject', 'technique', 'setting', 'confidence', 'notes', 'locationHint'],
 } as const;
+
+const VERIFY_SYSTEM_INSTRUCTION = `You verify filename parts for a video clip. You do NOT see the video — only a draft JSON from a vision model, technical metadata, and the original filename.
+
+Return strictly valid JSON matching the provided schema (same fields as the draft).
+
+Rules:
+- Keep the draft unchanged when subject, technique, setting, confidence, and notes are mutually consistent with metadata and filename cues.
+- Fix contradictions minimally (e.g. vague subject vs specific notes). Never invent proper nouns, venues, or events absent from the draft, draft notes, or meaningful words in the original filename.
+- Preserve hyphenated-lowercase slugs. Same generic-token bans as vision naming: avoid bare "people", "person", "video", "clip", "scene", "moment", etc.
+- If still ambiguous, use lower confidence and explain briefly in notes rather than guessing specifics.
+- Pass locationHint through from the draft unchanged — you cannot see the frames.`;
 
 class RateLimitError extends Error {
   retryAfterSec: number | null;
@@ -121,14 +185,13 @@ async function sleepWithCountdown(
   }
 }
 
-// --- Light pacing --------------------------------------------------------
-// OpenAI tier-1 is 500 RPM (~8/sec). With concurrency=3 and ~1-2s per call
-// we won't come close, so a tiny floor (200ms) is enough to avoid microbursts.
-const MIN_REQUEST_GAP_MS = 200;
+// --- Batch-safe pacing ---------------------------------------------------
+// High-detail vision can trip TPM limits long before RPM limits. Gap is configurable
+// in Settings (requestGapMs).
 let nextAvailableAt = 0;
 let pacingChain: Promise<void> = Promise.resolve();
 
-async function paceRequest(onProgress?: (m: string) => void): Promise<void> {
+async function paceRequest(gapMs: number, onProgress?: (m: string) => void): Promise<void> {
   const wait = pacingChain.then(async () => {
     const now = Date.now();
     if (now < nextAvailableAt) {
@@ -139,7 +202,7 @@ async function paceRequest(onProgress?: (m: string) => void): Promise<void> {
         await sleep(ms);
       }
     }
-    nextAvailableAt = Math.max(Date.now(), nextAvailableAt) + MIN_REQUEST_GAP_MS;
+    nextAvailableAt = Math.max(Date.now(), nextAvailableAt) + gapMs;
   });
   pacingChain = wait.catch(() => undefined);
   return wait;
@@ -158,8 +221,8 @@ function validate(parsed: Partial<NameParts>): NameParts {
     technique: parsed.technique,
     setting: parsed.setting,
     confidence,
-    // Treat empty-string notes (forced by strict schema) as undefined.
     notes: parsed.notes && parsed.notes.length > 0 ? parsed.notes : undefined,
+    locationHint: parsed.locationHint && parsed.locationHint.length > 0 ? parsed.locationHint : undefined,
   };
 }
 
@@ -183,19 +246,23 @@ function extractRetryAfter(headerVal: string | null, body: string): number | nul
   return null;
 }
 
+/** Safety valve so a permanently broken network cannot loop forever. */
+const MAX_RETRY_ITERATIONS = 60;
+
 /**
- * Retry wrapper. Honors Retry-After (from server) when present and bails out
- * once total retry/wait time exceeds MAX_TOTAL_RETRY_MS — better to fail fast
- * and let the user re-trigger than to spin invisibly for minutes.
+ * Retry wrapper. Honors Retry-After when present. For 429/5xx/network errors,
+ * keeps backing off until either success, time budget is too tight for the next
+ * wait, or iteration cap — avoids the old bug where only six tries ran while the
+ * error text implied the full 180s budget had been used.
  */
 async function withRetry<T>(
   fn: () => Promise<T>,
   onProgress?: (message: string) => void,
-  attempts = 6,
 ): Promise<T> {
   let lastErr: unknown;
   const startedAt = Date.now();
-  for (let i = 0; i < attempts; i++) {
+
+  for (let attempt = 1; attempt <= MAX_RETRY_ITERATIONS; attempt++) {
     try {
       return await fn();
     } catch (err: unknown) {
@@ -210,33 +277,62 @@ async function withRetry<T>(
         );
       if (!is429 && !is5xx && !isNetwork) throw err;
 
-      let delay: number;
-      if (isRateLimit && err.retryAfterSec != null) {
-        delay = err.retryAfterSec * 1000 + 500;
-      } else {
-        const base = is429 ? 2000 : 800;
-        delay = Math.min(base * Math.pow(2, i), 30_000) + Math.random() * 500;
-      }
-
-      const elapsed = Date.now() - startedAt;
-      const budgetLeft = MAX_TOTAL_RETRY_MS - elapsed;
-      const isLastAttempt = i === attempts - 1;
-
-      if (isLastAttempt || delay > budgetLeft) {
+      // No point scheduling another backoff if we're out of iterations.
+      if (attempt === MAX_RETRY_ITERATIONS) {
         if (is429) {
+          monitorError('openai', 'rate limit — max retry iterations', {
+            waitedMs: Date.now() - startedAt,
+            iterations: MAX_RETRY_ITERATIONS,
+          });
           throw new Error(
-            `OpenAI rate limited — could not get a slot within ${Math.round(MAX_TOTAL_RETRY_MS / 1000)}s. ` +
-              `Check your usage/billing at platform.openai.com, then click ↻.`,
+            `OpenAI rate limited — still failing after ${MAX_RETRY_ITERATIONS} retries (~${Math.round((Date.now() - startedAt) / 1000)}s). ` +
+              `Wait a minute, check usage at platform.openai.com, then click ↻.`,
           );
         }
         throw err;
       }
+
+      let delay: number;
+      if (err instanceof RateLimitError && err.retryAfterSec != null) {
+        delay = err.retryAfterSec * 1000 + 500;
+      } else {
+        const base = is429 ? 2000 : 800;
+        delay = Math.min(base * Math.pow(2, attempt - 1), 30_000) + Math.random() * 500;
+      }
+
+      const elapsed = Date.now() - startedAt;
+      const budgetLeft = MAX_TOTAL_RETRY_MS - elapsed;
+
+      if (delay > budgetLeft) {
+        if (is429) {
+          monitorError('openai', 'rate limit budget exhausted', {
+            waitedMs: elapsed,
+            budgetMs: MAX_TOTAL_RETRY_MS,
+            delayNeededMs: Math.round(delay),
+            attempt,
+          });
+          throw new Error(
+            `OpenAI rate limited — after ${Math.round(elapsed / 1000)}s the next backoff needs ~${Math.round(delay / 1000)}s (cap ${Math.round(MAX_TOTAL_RETRY_MS / 1000)}s). ` +
+              `Check usage/billing at platform.openai.com, then click ↻.`,
+          );
+        }
+        throw err;
+      }
+
+      monitorWarn('openai', 'transient failure, backing off', {
+        attempt,
+        maxIterations: MAX_RETRY_ITERATIONS,
+        delayMs: Math.round(delay),
+        kind: is429 ? '429' : is5xx ? '5xx' : 'network',
+        snippet: msg.slice(0, 120),
+      });
 
       nextAvailableAt = Math.max(nextAvailableAt, Date.now() + delay);
       const label = is429 ? 'rate limited — retrying in' : 'retrying in';
       await sleepWithCountdown(delay, label, onProgress);
     }
   }
+
   throw lastErr;
 }
 
@@ -244,10 +340,12 @@ async function withRetry<T>(
 function buildMessages(
   frames: Buffer[],
   metadata: ClipMetadata,
+  originalName?: string,
 ): Array<{ role: 'system' | 'user'; content: unknown }> {
   const rec =
     metadata.recordedAtUtc != null ? `, recorded(UTC)=${metadata.recordedAtUtc}` : '';
   const metaLine = `Metadata: duration=${metadata.durationSec.toFixed(1)}s, ${metadata.width}x${metadata.height}, ${metadata.fps.toFixed(1)}fps, codec=${metadata.codec}${rec}.`;
+  const originalNameLine = originalName ? `Original filename: ${originalName}.` : '';
   const framesLine = `Frames provided: ${frames.length}, sampled evenly across the timeline (earliest first).`;
 
   const userContent: Array<
@@ -256,7 +354,7 @@ function buildMessages(
   > = [
     {
       type: 'text',
-      text: `${metaLine}\n${framesLine}\n\nAnalyze the clip and produce the filename parts.`,
+      text: `${metaLine}\n${originalNameLine}\n${framesLine}\n\nAnalyze the clip, read any in-video cues carefully, use the original filename only when it matches the frames, and produce specific filename parts.`,
     },
   ];
   for (const buf of frames) {
@@ -264,9 +362,9 @@ function buildMessages(
       type: 'image_url',
       image_url: {
         url: `data:image/jpeg;base64,${buf.toString('base64')}`,
-        // `low` = 85 tokens fixed cost per image. Plenty of detail for naming
-        // and keeps cost predictable at ~$0.0006/clip with 4 frames.
-        detail: 'low',
+        // Use high-detail vision so signs, lower-thirds, storefronts, and
+        // other small in-video cues survive the trip to the model.
+        detail: 'high',
       },
     });
   }
@@ -277,7 +375,31 @@ function buildMessages(
   ];
 }
 
-/** Pull the JSON string out of an OpenAI Chat Completion response. */
+function buildVerifyMessages(
+  draft: NameParts,
+  metadata: ClipMetadata,
+  originalName?: string,
+): Array<{ role: 'system' | 'user'; content: string }> {
+  const rec =
+    metadata.recordedAtUtc != null ? `, recorded(UTC)=${metadata.recordedAtUtc}` : '';
+  const metaLine = `Metadata: duration=${metadata.durationSec.toFixed(1)}s, ${metadata.width}x${metadata.height}, ${metadata.fps.toFixed(1)}fps, codec=${metadata.codec}${rec}.`;
+  const originalNameLine = originalName ? `Original filename: ${originalName}.` : '';
+  const draftJson = JSON.stringify({
+    subject: draft.subject,
+    technique: draft.technique,
+    setting: draft.setting,
+    confidence: draft.confidence,
+    notes: draft.notes ?? '',
+    locationHint: draft.locationHint ?? '',
+  });
+  const userText = `${metaLine}\n${originalNameLine}\n\nDraft from vision model:\n${draftJson}\n\nVerify and return corrected JSON. Do not invent details unsupported by the draft, notes, or filename.`;
+
+  return [
+    { role: 'system', content: VERIFY_SYSTEM_INSTRUCTION },
+    { role: 'user', content: userText },
+  ];
+}
+
 function extractContent(data: unknown): string | null {
   const d = data as {
     choices?: Array<{ message?: { content?: string | null; refusal?: string | null } }>;
@@ -293,21 +415,27 @@ function extractContent(data: unknown): string | null {
 async function analyzeViaProxy(
   frames: Buffer[],
   metadata: ClipMetadata,
-  proxyUrl: string,
+  originalName: string | undefined,
+  settings: Settings,
   onProgress?: (m: string) => void,
 ): Promise<NameParts> {
-  const url = `${proxyUrl.replace(/\/$/, '')}/analyze`;
+  const gapMs = resolveRequestGapMs(settings);
+  const model = resolveOpenAiModel(settings);
+  const url = `${settings.proxyUrl.replace(/\/$/, '')}/analyze`;
   return withRetry(async () => {
-    await paceRequest(onProgress);
+    await paceRequest(gapMs, onProgress);
     onProgress?.('contacting analyzer');
     const res = await fetch(url, {
       method: 'POST',
+      signal: AbortSignal.timeout(240_000),
       headers: {
         'Content-Type': 'application/json',
         'X-Shared-Secret': CLIENT_SHARED_SECRET,
       },
       body: JSON.stringify({
+        model,
         frames: frames.map((f) => f.toString('base64')),
+        ...(originalName ? { originalName } : {}),
         metadata: {
           durationSec: metadata.durationSec,
           width: metadata.width,
@@ -327,7 +455,71 @@ async function analyzeViaProxy(
           retryAfter,
         );
       }
+      // 400 "missing frames or metadata" usually means the frame extraction
+      // produced empty or zero-byte outputs — give a more actionable message.
+      if (res.status === 400 && text.includes('missing frames')) {
+        throw new Error(
+          'Frame extraction failed silently — the file codec may not be supported on this platform. ' +
+            'Try converting the clip to MP4 and dropping it again.',
+        );
+      }
       throw new Error(`Proxy error ${res.status}: ${text.slice(0, 200)}`);
+    }
+    const parsed = (await res.json()) as Partial<NameParts>;
+    return validate(parsed);
+  }, onProgress);
+}
+
+async function verifyViaProxy(
+  draft: NameParts,
+  metadata: ClipMetadata,
+  originalName: string | undefined,
+  settings: Settings,
+  onProgress?: (m: string) => void,
+): Promise<NameParts> {
+  const gapMs = resolveRequestGapMs(settings);
+  const model = resolveOpenAiModel(settings);
+  const url = `${settings.proxyUrl.replace(/\/$/, '')}/verify`;
+  return withRetry(async () => {
+    await paceRequest(gapMs, onProgress);
+    onProgress?.('verification pass');
+    const res = await fetch(url, {
+      method: 'POST',
+      signal: AbortSignal.timeout(120_000),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shared-Secret': CLIENT_SHARED_SECRET,
+      },
+      body: JSON.stringify({
+        model,
+        draft: {
+          subject: draft.subject,
+          technique: draft.technique,
+          setting: draft.setting,
+          confidence: draft.confidence,
+          notes: draft.notes ?? '',
+        },
+        ...(originalName ? { originalName } : {}),
+        metadata: {
+          durationSec: metadata.durationSec,
+          width: metadata.width,
+          height: metadata.height,
+          fps: metadata.fps,
+          codec: metadata.codec,
+          ...(metadata.recordedAtUtc ? { recordedAtUtc: metadata.recordedAtUtc } : {}),
+        },
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      if (res.status === 429) {
+        const retryAfter = extractRetryAfter(res.headers.get('Retry-After'), text);
+        throw new RateLimitError(
+          `Rate limited (429). ${retryAfter ? `Retrying in ${retryAfter}s.` : ''}`,
+          retryAfter,
+        );
+      }
+      throw new Error(`Proxy verify error ${res.status}: ${text.slice(0, 200)}`);
     }
     const parsed = (await res.json()) as Partial<NameParts>;
     return validate(parsed);
@@ -337,24 +529,27 @@ async function analyzeViaProxy(
 async function analyzeViaDirect(
   frames: Buffer[],
   metadata: ClipMetadata,
+  originalName: string | undefined,
   apiKey: string,
+  settings: Settings,
   onProgress?: (m: string) => void,
 ): Promise<NameParts> {
+  const gapMs = resolveRequestGapMs(settings);
+  const model = resolveOpenAiModel(settings);
   return withRetry(async () => {
-    await paceRequest(onProgress);
+    await paceRequest(gapMs, onProgress);
     onProgress?.('contacting analyzer');
-    const messages = buildMessages(frames, metadata);
+    const messages = buildMessages(frames, metadata, originalName);
     const res = await fetch(OPENAI_API_URL, {
       method: 'POST',
+      signal: AbortSignal.timeout(240_000),
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: OPENAI_MODEL,
-        // Low temperature pushes the model toward the most-supported, specific name
-        // rather than creative variants. Repeated runs on the same clip will be stable.
-        temperature: 0.2,
+        model,
+        temperature: 0.1,
         messages,
         response_format: {
           type: 'json_schema',
@@ -397,21 +592,134 @@ async function analyzeViaDirect(
   }, onProgress);
 }
 
+async function verifyViaDirect(
+  draft: NameParts,
+  metadata: ClipMetadata,
+  originalName: string | undefined,
+  apiKey: string,
+  settings: Settings,
+  onProgress?: (m: string) => void,
+): Promise<NameParts> {
+  const gapMs = resolveRequestGapMs(settings);
+  const model = resolveOpenAiModel(settings);
+  return withRetry(async () => {
+    await paceRequest(gapMs, onProgress);
+    onProgress?.('verification pass');
+    const messages = buildVerifyMessages(draft, metadata, originalName);
+    const res = await fetch(OPENAI_API_URL, {
+      method: 'POST',
+      signal: AbortSignal.timeout(120_000),
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.1,
+        messages,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'clip_name_verify',
+            strict: true,
+            schema: RESPONSE_SCHEMA,
+          },
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      if (res.status === 429) {
+        const retryAfter = extractRetryAfter(res.headers.get('Retry-After'), text);
+        throw new RateLimitError(
+          `Rate limited (429). ${retryAfter ? `Retrying in ${retryAfter}s.` : ''}`,
+          retryAfter,
+        );
+      }
+      if (res.status === 401) {
+        throw new Error('OpenAI rejected the API key (401). Open Settings to update it.');
+      }
+      throw new Error(`OpenAI verify error ${res.status}: ${text.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    const content = extractContent(data);
+    if (!content) {
+      throw new Error('OpenAI returned an empty verification response.');
+    }
+    let parsed: Partial<NameParts>;
+    try {
+      parsed = JSON.parse(content) as Partial<NameParts>;
+    } catch {
+      throw new Error(`OpenAI returned unparseable JSON: ${content.slice(0, 200)}`);
+    }
+    return validate(parsed);
+  }, onProgress);
+}
+
 export async function analyzeClip({
   frames,
   metadata,
   settings,
+  originalName,
   apiKey,
   onProgress,
 }: AnalyzeArgs): Promise<NameParts> {
+  // Guard: if ffmpeg produced no frames (can happen on Windows for certain
+  // MOV/codec combinations), bail early with a clear message instead of
+  // forwarding an empty array to the worker and getting a cryptic 400.
+  const validFrames = frames.filter((f) => f && f.length > 0);
+  if (validFrames.length === 0) {
+    throw new Error(
+      'Frame extraction produced no output — the file codec may not be supported on this platform. ' +
+        'Try converting to MP4 first, or use the "8 frames" option which retries with different settings.',
+    );
+  }
+
+  let vision: NameParts;
   if (settings.backendMode === 'proxy') {
     if (!settings.proxyUrl) {
       throw new Error('Proxy URL not set. Open Settings to configure.');
     }
-    return analyzeViaProxy(frames, metadata, settings.proxyUrl, onProgress);
+    vision = await analyzeViaProxy(validFrames, metadata, originalName, settings, onProgress);
+  } else {
+    if (!apiKey) {
+      throw new Error('No OpenAI API key set. Open Settings to add one.');
+    }
+    vision = await analyzeViaDirect(validFrames, metadata, originalName, apiKey, settings, onProgress);
   }
-  if (!apiKey) {
-    throw new Error('No OpenAI API key set. Open Settings to add one.');
+
+  let result: NameParts;
+  if (!settings.verificationSecondPass) {
+    result = vision;
+  } else if (settings.backendMode === 'proxy') {
+    result = await verifyViaProxy(vision, metadata, originalName, settings, onProgress);
+  } else {
+    result = await verifyViaDirect(vision, metadata, originalName, apiKey!, settings, onProgress);
   }
-  return analyzeViaDirect(frames, metadata, apiKey, onProgress);
+
+  // Tier 0: GPS embedded in the clip — most precise, works for any location
+  if (metadata.gpsLat != null && metadata.gpsLng != null) {
+    onProgress?.('locating via GPS');
+    const gpsResolved = await resolveLocationFromGps(metadata.gpsLat, metadata.gpsLng);
+    if (gpsResolved) {
+      result = { ...result, setting: gpsResolved };
+      return result;
+    }
+  }
+
+  // Tiers 1-4: AI locationHint → local list → Nominatim → Brave Search → raw hint
+  // Brave gets an enriched query: "{subject words} {locationHint}" so "building demolition"
+  // narrows "downtown Nashville" to the active demolition story (e.g. Second Ave North).
+  if (result.locationHint) {
+    onProgress?.('looking up location');
+    const proxyUrl = settings.backendMode === 'proxy' ? settings.proxyUrl : undefined;
+    const subjectWords = result.subject.replace(/-/g, ' ');
+    const braveQuery = `${subjectWords} ${result.locationHint}`.trim();
+    const resolved = await resolveLocation(result.locationHint, proxyUrl, braveQuery);
+    if (resolved) result = { ...result, setting: resolved };
+  }
+
+  return result;
 }

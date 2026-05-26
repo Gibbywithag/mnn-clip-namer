@@ -7,9 +7,12 @@
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
+    "postinstall": "electron-rebuild -f -w keytar",
+    "rebuild:native": "electron-rebuild -f -w keytar",
     "dev": "vite",
     "build": "tsc -p tsconfig.electron.json && vite build && electron-builder",
-    "build:mac": "tsc -p tsconfig.electron.json && vite build && electron-builder --mac",
+    "build:mac": "tsc -p tsconfig.electron.json && vite build && electron-builder --mac --config.mac.identity=null --config.mac.notarize=false --config.mac.hardenedRuntime=false",
+    "build:mac:signed": "tsc -p tsconfig.electron.json && vite build && electron-builder --mac",
     "build:win": "tsc -p tsconfig.electron.json && vite build && electron-builder --win",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
   },
@@ -25,6 +28,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.6.1",
     "@types/fluent-ffmpeg": "^2.1.27",
     "@types/node": "^22.7.4",
     "@types/react": "^18.3.11",
@@ -48,6 +52,15 @@
       "dist",
       "dist-electron"
     ],
+    "extraResources": [
+      {
+        "from": "resources/luts",
+        "to": "luts",
+        "filter": [
+          "*.cube"
+        ]
+      }
+    ],
     "fileAssociations": [
       {
         "ext": [
@@ -70,8 +83,11 @@
           ]
         }
       ],
-      "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true
     },
     "dmg": {
       "contents": [

@@ -45,6 +45,51 @@ function mergeFfprobeTags(
   return out;
 }
 
+// GPS tag names used by Sony, Canon, DJI, GoPro, and Apple QuickTime
+const GPS_TAG_KEYS = [
+  'com.apple.quicktime.location.ISO6709',
+  'location',
+  'GPS_coordinates',
+  'gps_coordinates',
+  'location-eng',
+  'com.android.capture.fps', // catch-all scan below handles the rest
+] as const;
+
+/**
+ * Parse an ISO 6709 location string into decimal lat/lng.
+ * Common formats:
+ *   +36.1628-086.7816+169.104/   (DJI, Sony, Apple)
+ *   +36.163-86.782/
+ *   +3609.768-08646.898/         (degrees+minutes, less common)
+ */
+function parseISO6709(s: string): { lat: number; lng: number } | null {
+  const m = s.match(/^([+-]\d+\.?\d*)([+-]\d+\.?\d*)/);
+  if (!m) return null;
+  const lat = parseFloat(m[1]);
+  const lng = parseFloat(m[2]);
+  if (isNaN(lat) || isNaN(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat, lng };
+}
+
+function gpsFromTags(tags: Record<string, string>): { lat: number; lng: number } | undefined {
+  for (const key of GPS_TAG_KEYS) {
+    const raw = tags[key];
+    if (raw) {
+      const parsed = parseISO6709(raw);
+      if (parsed) return parsed;
+    }
+  }
+  // Broad scan: any tag whose value looks like an ISO 6709 string
+  for (const val of Object.values(tags)) {
+    if (/^[+-]\d{1,3}\.\d+[+-]\d{1,3}\.\d+/.test(val)) {
+      const parsed = parseISO6709(val);
+      if (parsed) return parsed;
+    }
+  }
+  return undefined;
+}
+
 const RECORDING_TAG_KEYS = [
   'creation_time',
   'com.apple.quicktime.creationdate',
@@ -96,6 +141,7 @@ export async function probeMetadata(filePath: string): Promise<ClipMetadata> {
           : 0;
       const merged = mergeFfprobeTags(data.format?.tags, data.streams);
       const recordedAtUtc = recordedAtUtcFromTags(merged);
+      const gps = gpsFromTags(merged);
       resolve({
         durationSec: Number(data.format.duration ?? 0),
         width: Number(videoStream.width ?? 0),
@@ -104,6 +150,7 @@ export async function probeMetadata(filePath: string): Promise<ClipMetadata> {
         codec: String(videoStream.codec_name ?? 'unknown'),
         sizeBytes: stat.size,
         ...(recordedAtUtc ? { recordedAtUtc } : {}),
+        ...(gps ? { gpsLat: gps.lat, gpsLng: gps.lng } : {}),
       });
     });
   });

@@ -45,18 +45,24 @@ npm run build:win
 
 Share the `.dmg` (Mac) or `.exe` (Windows) with anyone. Installer included — no Node, Python, or other deps required. ffmpeg is bundled per-OS.
 
-### C. Push to GitHub + download Windows build on another PC
+### C. Push to GitHub + share downloads
 
 1. Install GitHub CLI once: `brew install gh`
-2. Build the Windows installer (works from Mac too): `npm run build:win`
-3. Run:
+2. Build one or both desktop downloads:
+
+```bash
+npm run build:mac
+npm run build:win
+```
+
+3. Publish the builds to GitHub Releases:
 
 ```bash
 chmod +x scripts/github-publish.sh
 ./scripts/github-publish.sh
 ```
 
-The script logs you into GitHub in the browser (first time only), creates a **private** repo, pushes this source tree, and attaches **`release/MNN Clip Namer Setup <version>.exe`** to **Releases**.
+The script logs you into GitHub in the browser (first time only), creates a **private** repo, pushes this source tree, and attaches any **`.exe`** and **`.dmg`** files from `release/` to **Releases**.
 
 Optional — skip the repo-name prompt:
 
@@ -64,7 +70,7 @@ Optional — skip the repo-name prompt:
 GITHUB_REPO_NAME=my-org-mnn-clip-namer ./scripts/github-publish.sh
 ```
 
-On your work laptop: open the repo in the browser → **Releases** → download the `.exe`.
+End users open the repo in the browser → **Releases** → download the `.exe` for Windows or `.dmg` for Mac.
 
 > **Privacy:** `electron/services/buildConfig.ts` contains your Worker URL and shared client secret baked into installers. Treat the repo as **private** unless you rotate those values.
 
@@ -87,6 +93,8 @@ In Settings you can toggle between "Use the MNN proxy" (default) and "Use my own
 - **Retry with exponential backoff** for 429/5xx
 - **Undo last rename batch** (persisted history ledger)
 - **Rename in place** OR **Copy to folder** modes
+- **Embedded video metadata** (title, description, keywords, original filename, AI confidence)
+- **Per-clip output image processing** with the bundled Neutral Fx6 conversion LUT and exposure adjustment
 - **CSV export** of rename map
 - **Backend health indicator** in the title bar
 - **Automatic fallback** to a user-provided key if the proxy is down
@@ -124,6 +132,7 @@ mnn-clip-namer/
 - Video files never leave your machine except for 4 small (~50 KB each) keyframe JPEGs per clip.
 - Those JPEGs go to your Worker → OpenAI gpt-4o-mini. OpenAI processes and returns a filename.
 - API key and shared secret are build-time constants baked into the installer — they never appear in user settings, logs, or on disk in plain text. They are theoretically extractable from the installer by a determined attacker; for more sensitive deployments add Cloudflare Access in front of the Worker.
+- Output image processing uses ffmpeg to render a new video only for clips where the row-level LUT/exposure checkbox is enabled. Unchecked clips keep the faster stream-copy metadata path.
 - No telemetry.
 
 ## Code signing (optional, recommended for wide sharing)

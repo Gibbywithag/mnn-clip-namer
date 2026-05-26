@@ -13,10 +13,28 @@ const api: MnnApi = {
   hasApiKey: () => ipcRenderer.invoke('settings:hasApiKey') as Promise<boolean>,
   openExternalUrl: (url) => ipcRenderer.invoke('ui:openExternal', url) as Promise<void>,
   checkBackend: () => ipcRenderer.invoke('backend:check') as Promise<BackendStatus>,
+  openClipPath: (filePath) =>
+    ipcRenderer.invoke('shell:openClipPath', filePath) as Promise<{
+      ok: boolean;
+      error?: string;
+    }>,
+  fileUrlFromPath: (filePath) =>
+    ipcRenderer.invoke('media:fileUrl', filePath) as Promise<{
+      ok: boolean;
+      url?: string;
+      error?: string;
+    }>,
+  previewProxyForPath: (filePath) =>
+    ipcRenderer.invoke('media:previewProxy', filePath) as Promise<{
+      ok: boolean;
+      url?: string;
+      error?: string;
+    }>,
 
   // Pipeline
   ingestPaths: (paths) => ipcRenderer.invoke('ingest:paths', paths) as Promise<Clip[]>,
-  analyzeClip: (id) => ipcRenderer.invoke('ai:analyzeClip', id) as Promise<Clip>,
+  analyzeClip: (id, options) =>
+    ipcRenderer.invoke('ai:analyzeClip', id, options ?? {}) as Promise<Clip>,
   applyRenames: (jobs: RenameJob[]) =>
     ipcRenderer.invoke('rename:apply', jobs) as Promise<
       import('../shared/types').RenameResult[]

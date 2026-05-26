@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# One-shot: log into GitHub (if needed), push this repo, publish Windows installer on Releases.
+# One-shot: log into GitHub (if needed), push this repo, publish desktop builds on Releases.
 # Run from macOS Terminal:
 #   chmod +x scripts/github-publish.sh && ./scripts/github-publish.sh
 #
-# Requires: gh (brew install gh), Windows installer built (npm run build:win).
+# Requires: gh (brew install gh), plus at least one build in release/:
+#   npm run build:mac
+#   npm run build:win
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,11 +24,14 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 VERSION="$(node -p "require('./package.json').version")"
-EXE="$ROOT/release/MNN Clip Namer Setup ${VERSION}.exe"
+shopt -s nullglob
+ASSETS=("$ROOT"/release/*.exe "$ROOT"/release/*.dmg)
 
-if [[ ! -f "$EXE" ]]; then
-  echo "Missing: $EXE"
-  echo "Run: npm run build:win"
+if [[ ${#ASSETS[@]} -eq 0 ]]; then
+  echo "No release assets found in: $ROOT/release"
+  echo "Run one or both:"
+  echo "  npm run build:mac"
+  echo "  npm run build:win"
   exit 1
 fi
 
@@ -47,24 +52,24 @@ else
 fi
 
 TAG="v${VERSION}"
-NOTES="## Windows (work laptops)
+NOTES="## Downloads
 
-Download **MNN Clip Namer Setup ${VERSION}.exe** — supports Intel x64 and ARM64.
+- **Windows:** download the \`.exe\`.
+- **macOS:** download the \`.dmg\`.
 
-If SmartScreen blocks the installer: **More info → Run anyway**.
+## First-open warnings
 
-## macOS
-
-From this repo: \`npm ci && npm run build:mac\` → \`release/*.dmg\`
+- Windows SmartScreen may show a warning for unsigned builds: **More info → Run anyway**.
+- macOS unsigned builds may require right-clicking the app and choosing **Open** the first time.
 
 Default build talks to your Cloudflare Worker proxy (shared secret baked into the installer).
 "
 
 if gh release view "$TAG" >/dev/null 2>&1; then
   echo "Updating assets on existing release $TAG..."
-  gh release upload "$TAG" "$EXE" --clobber
+  gh release upload "$TAG" "${ASSETS[@]}" --clobber
 else
-  gh release create "$TAG" "$EXE" --title "MNN Clip Namer ${VERSION}" --notes "$NOTES"
+  gh release create "$TAG" "${ASSETS[@]}" --title "MNN Clip Namer ${VERSION}" --notes "$NOTES"
 fi
 
 echo ""
