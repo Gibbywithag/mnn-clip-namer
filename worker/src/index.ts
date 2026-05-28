@@ -170,7 +170,7 @@ Rules:
 - technique: Infer from metadata only. Portrait video (height > width) → "selfie-facing". Duration < 5 seconds → "broll". Default → "wide-shot".
 - setting: Always return "unknown-location" — no frames available to identify the setting.
 - confidence: Always return "low".
-- notes: Always include exactly: "Named from filename only — H.265/HEVC not supported in browser. Re-upload as H.264 for AI vision."
+- notes: Always include exactly: "Named from filename only — frames couldn't be extracted (H.265/HEVC or unsupported codec). Re-upload as H.264 MP4 for AI vision."
 - locationHint: Always return empty string.`;
 
 const VERIFY_SYSTEM_INSTRUCTION = `You verify filename parts for a video clip. You do NOT see the video — only a draft JSON from a vision model, technical metadata, and the original filename.
