@@ -46,6 +46,19 @@ interface VerifyBody {
   metadata: AnalyzeBody['metadata'];
 }
 
+interface AnalyzeNameBody {
+  originalName: string;
+  model?: string;
+  metadata?: {
+    durationSec?: number;
+    width?: number;
+    height?: number;
+    fps?: number;
+    codec?: string;
+    recordedAtUtc?: string;
+  };
+}
+
 const ALLOWED_MODELS = ['gpt-4o-mini', 'gpt-4o'] as const;
 
 function normalizeModel(input: unknown): (typeof ALLOWED_MODELS)[number] {
@@ -147,6 +160,18 @@ specific compound (e.g. "wide-shot" is fine because "wide" qualifies it).
 
 Never include spaces, underscores, file extensions, or any punctuation other than hyphens.`;
 
+const FILENAME_SYSTEM_INSTRUCTION = `You generate filename parts for a video clip based ONLY on the original filename and any available technical metadata. No video frames are provided.
+
+Parse the original filename to extract meaningful words. Remove noise: file extensions, production tags ("full", "final", "edit", "raw", "copy", "new", "v1", "v2"), camera card codes (A001C002, C0001, DJI_), standalone numbers and timestamps.
+
+Rules:
+- subject: 2–3 hyphen-separated lowercase words from the filename's meaningful content. Use the most specific words available (e.g. "Ribbon Cutting Full.MOV" → "ribbon-cutting-ceremony", "MayorsOffice_Budget.mp4" → "mayor-budget-meeting"). Never use bare generic tokens: "clip", "video", "footage", "file".
+- technique: Infer from metadata only. Portrait video (height > width) → "selfie-facing". Duration < 5 seconds → "broll". Default → "wide-shot".
+- setting: Always return "unknown-location" — no frames available to identify the setting.
+- confidence: Always return "low".
+- notes: Always include exactly: "Named from filename only — H.265/HEVC not supported in browser. Re-upload as H.264 for AI vision."
+- locationHint: Always return empty string.`;
+
 const VERIFY_SYSTEM_INSTRUCTION = `You verify filename parts for a video clip. You do NOT see the video — only a draft JSON from a vision model, technical metadata, and the original filename.
 
 Return strictly valid JSON matching the provided schema (same fields as the draft).
@@ -226,6 +251,7 @@ export default {
 
     const isAnalyze = url.pathname === '/analyze' && request.method === 'POST';
     const isVerify = url.pathname === '/verify' && request.method === 'POST';
+    const isAnalyzeName = url.pathname === '/analyze-name' && request.method === 'POST';
     const isWebSearch = url.pathname === '/websearch' && request.method === 'POST';
 
     if (isWebSearch) {
@@ -276,7 +302,7 @@ export default {
       }
     }
 
-    if (!isAnalyze && !isVerify) {
+    if (!isAnalyze && !isVerify && !isAnalyzeName) {
       return json({ error: 'not found' }, { status: 404 });
     }
 
@@ -396,6 +422,97 @@ export default {
       }
 
       return json(parsed);
+    }
+
+    // POST /analyze-name  (filename-only fallback — no frames required)
+    if (isAnalyzeName) {
+      let body: AnalyzeNameBody;
+      try {
+        body = (await request.json()) as AnalyzeNameBody;
+      } catch {
+        return json({ error: 'invalid json' }, { status: 400 });
+      }
+      if (!body.originalName || typeof body.originalName !== 'string') {
+        return json({ error: 'missing originalName' }, { status: 400 });
+      }
+
+      const model = normalizeModel(body.model);
+      const m = body.metadata ?? {};
+      const width = m.width ?? 0;
+      const height = m.height ?? 0;
+      const durationSec = m.durationSec ?? 0;
+      const codec = m.codec ?? 'unknown';
+      const rec = m.recordedAtUtc ? `, recorded(UTC)=${m.recordedAtUtc}` : '';
+      const metaLine = `Metadata: duration=${durationSec.toFixed(1)}s, ${width}x${height}, codec=${codec}${rec}.`;
+
+      const openaiReq = {
+        model,
+        temperature: 0.1,
+        messages: [
+          { role: 'system', content: FILENAME_SYSTEM_INSTRUCTION },
+          {
+            role: 'user',
+            content: `Original filename: ${body.originalName}\n${metaLine}\n\nGenerate filename parts from the filename and metadata only. No frames are available.`,
+          },
+        ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'clip_name_from_filename',
+            strict: true,
+            schema: RESPONSE_SCHEMA,
+          },
+        },
+      };
+
+      let res: Response;
+      try {
+        res = await fetch(OPENAI_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify(openaiReq),
+          signal: AbortSignal.timeout(OPENAI_FETCH_MS),
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return json({ error: 'openai fetch failed', model, detail: msg.slice(0, 200) }, { status: 502 });
+      }
+
+      if (!res.ok) {
+        const text = await res.text();
+        const isRateLimited = res.status === 429;
+        const retryAfterSec = isRateLimited
+          ? extractRetryAfterSeconds(res.headers.get('Retry-After'), text)
+          : null;
+        const headers: Record<string, string> = {};
+        if (retryAfterSec != null) headers['Retry-After'] = String(retryAfterSec);
+        return json(
+          { error: 'openai upstream error', status: res.status, model, retryAfterSec, detail: text.slice(0, 500) },
+          { status: isRateLimited ? 429 : 502, headers },
+        );
+      }
+
+      const nameData = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string | null; refusal?: string | null } }>;
+      };
+      const nameChoice = nameData.choices?.[0]?.message;
+      if (nameChoice?.refusal) {
+        return json({ error: 'openai refusal', model, refusal: nameChoice.refusal.slice(0, 300) }, { status: 502 });
+      }
+      const nameText = nameChoice?.content;
+      if (!nameText) {
+        return json({ error: 'empty openai response', model }, { status: 502 });
+      }
+      let nameParsed: unknown;
+      try {
+        nameParsed = JSON.parse(nameText);
+      } catch {
+        return json({ error: 'unparseable openai response', model, raw: nameText.slice(0, 300) }, { status: 502 });
+      }
+      return json(nameParsed);
     }
 
     // POST /analyze
