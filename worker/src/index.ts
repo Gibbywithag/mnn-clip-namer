@@ -1,5 +1,6 @@
 /**
  * MNN Clip Namer — OpenAI proxy worker.
+ * Routes: /analyze  /verify  /analyze-name  /websearch
  *
  * Accepts POST /analyze with { frames: string[] (base64 JPEG), metadata: {...} }
  * and returns OpenAI's structured JSON response. The OpenAI API key never leaves
