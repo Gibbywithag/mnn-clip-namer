@@ -32,12 +32,15 @@ interface Env {
    * fails (out of credits, outage, etc.) — true cross-provider redundancy.
    */
   GEMINI_API_KEY?: string;
-  /** Gemini model to use for fallback. Defaults to gemini-2.0-flash. */
+  /** Primary Gemini model (cheap workhorse). Defaults to gemini-2.5-flash. */
   GEMINI_MODEL?: string;
+  /** Stronger Gemini model used to escalate hard clips. Defaults to gemini-2.5-pro. */
+  GEMINI_PRO_MODEL?: string;
 }
 
 const DEFAULT_MAIL_FROM = 'MNN Clip Namer <onboarding@resend.dev>';
-const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+const DEFAULT_GEMINI_PRO_MODEL = 'gemini-2.5-pro';
 
 interface AnalyzeBody {
   frames: string[]; // base64-encoded JPEGs
@@ -250,8 +253,13 @@ type GeminiPart =
  * and return the parsed JSON object matching RESPONSE_SCHEMA. Throws on failure
  * so the caller can fall through to the original OpenAI error.
  */
-async function callGeminiJSON(env: Env, systemText: string, userParts: GeminiPart[]): Promise<unknown> {
-  const model = env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+async function callGeminiJSON(
+  env: Env,
+  systemText: string,
+  userParts: GeminiPart[],
+  modelOverride?: string,
+): Promise<unknown> {
+  const model = modelOverride || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
   const endpoint =
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent` +
     `?key=${env.GEMINI_API_KEY}`;
@@ -873,33 +881,47 @@ export default {
       ...body.frames.map(b64 => ({ inline_data: { mime_type: 'image/jpeg', data: b64 } })),
     ];
 
+    // Tier 1 — Gemini Flash (cheap workhorse) names every clip.
     let gem: unknown = null;
     if (env.GEMINI_API_KEY) {
       try {
         gem = await callGeminiJSON(env, SYSTEM_INSTRUCTION, geminiParts);
       } catch (ge) {
-        console.error('[MNN] /analyze Gemini primary failed:', ge instanceof Error ? ge.message : String(ge));
+        console.error('[MNN] /analyze Gemini Flash failed:', ge instanceof Error ? ge.message : String(ge));
       }
     }
 
-    // "Hard" = Gemini unavailable, or it self-reported low confidence.
+    // "Hard" = Flash unavailable, or it self-reported low confidence.
     const hard = !gem || resultConfidence(gem) === 'low';
     if (gem && !hard) {
-      return json(gem, { headers: { 'X-Served-By': 'gemini' } });
+      return json(gem, { headers: { 'X-Served-By': 'gemini-flash' } });
     }
 
-    // Escalate to / fall back on OpenAI.
+    // Tier 2 — escalate hard clips to the stronger Gemini Pro (same account).
+    if (env.GEMINI_API_KEY) {
+      try {
+        const pro = await callGeminiJSON(
+          env, SYSTEM_INSTRUCTION, geminiParts, env.GEMINI_PRO_MODEL || DEFAULT_GEMINI_PRO_MODEL,
+        );
+        console.log(`[MNN] /analyze served by Gemini Pro (${gem ? 'escalated' : 'flash-unavailable'})`);
+        return json(pro, { headers: { 'X-Served-By': gem ? 'gemini-pro-escalated' : 'gemini-pro' } });
+      } catch (pe) {
+        console.error('[MNN] /analyze Gemini Pro failed:', pe instanceof Error ? pe.message : String(pe));
+      }
+    }
+
+    // Pro failed — if Flash gave us anything (even low confidence), use it.
+    if (gem) {
+      return json(gem, { headers: { 'X-Served-By': 'gemini-flash-lowconf' } });
+    }
+
+    // Tier 3 — last resort: OpenAI (a different provider, so it survives a
+    // Google-wide outage if/when it's funded). Returns an error if unavailable.
     try {
       const oa = await callOpenAIChatJSON(env, openaiReq);
-      console.log(`[MNN] /analyze served by OpenAI (${gem ? 'escalated-low-confidence' : 'gemini-unavailable'})`);
-      return json(oa, { headers: { 'X-Served-By': gem ? 'openai-escalated' : 'openai' } });
+      console.log('[MNN] /analyze served by OpenAI (last-resort backup)');
+      return json(oa, { headers: { 'X-Served-By': 'openai-lastresort' } });
     } catch (oaErr) {
-      // OpenAI failed. If Gemini gave us anything (even low confidence), use it.
-      if (gem) {
-        console.log('[MNN] /analyze OpenAI escalation failed — using Gemini low-confidence result');
-        return json(gem, { headers: { 'X-Served-By': 'gemini-lowconf' } });
-      }
-      // Both providers failed.
       const isQuota = oaErr instanceof OpenAIError && /insufficient_quota/i.test(oaErr.body);
       const status = oaErr instanceof OpenAIError ? oaErr.status : 502;
       const detail = oaErr instanceof Error ? oaErr.message : String(oaErr);
