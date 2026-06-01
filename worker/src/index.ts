@@ -284,6 +284,54 @@ async function callGeminiJSON(env: Env, systemText: string, userParts: GeminiPar
   return JSON.parse(text);
 }
 
+/** Error carrying the upstream HTTP status + body so callers can branch (e.g. quota). */
+class OpenAIError extends Error {
+  status: number;
+  body: string;
+  constructor(status: number, body: string) {
+    super(`openai ${status}: ${body.slice(0, 200)}`);
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/**
+ * Call the OpenAI chat completions API with a prebuilt request body and return
+ * the parsed JSON content (matching RESPONSE_SCHEMA). Throws OpenAIError on a
+ * non-2xx response, or Error on refusal/empty/unparseable output.
+ */
+async function callOpenAIChatJSON(env: Env, reqBody: object): Promise<unknown> {
+  const res = await fetch(OPENAI_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify(reqBody),
+    signal: AbortSignal.timeout(OPENAI_FETCH_MS),
+  });
+  if (!res.ok) {
+    throw new OpenAIError(res.status, await res.text().catch(() => ''));
+  }
+  const data = (await res.json()) as {
+    choices?: Array<{ message?: { content?: string | null; refusal?: string | null } }>;
+  };
+  const choice = data.choices?.[0]?.message;
+  if (choice?.refusal) throw new Error(`openai refusal: ${choice.refusal.slice(0, 200)}`);
+  const text = choice?.content;
+  if (!text) throw new Error('openai empty response');
+  return JSON.parse(text);
+}
+
+/** Extract the self-reported confidence from a model result, if present. */
+function resultConfidence(r: unknown): string | null {
+  if (r && typeof r === 'object' && 'confidence' in r) {
+    const c = (r as { confidence?: unknown }).confidence;
+    return typeof c === 'string' ? c : null;
+  }
+  return null;
+}
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -725,72 +773,32 @@ export default {
         },
       };
 
-      // Cross-provider failover for filename-only naming (text, no frames).
+      // Filename-only naming is always low-confidence by design, so there's no
+      // "hard clip" to escalate — just use Gemini primary, OpenAI only if Gemini
+      // is unavailable.
       const nameUserText = `Original filename: ${body.originalName}\n${metaLine}\n\nGenerate filename parts from the filename and metadata only. No frames are available.`;
-      const tryGeminiName = async (): Promise<Response | null> => {
-        if (!env.GEMINI_API_KEY) return null;
+
+      if (env.GEMINI_API_KEY) {
         try {
           const g = await callGeminiJSON(env, FILENAME_SYSTEM_INSTRUCTION, [{ text: nameUserText }]);
-          console.log('[MNN] /analyze-name served by Gemini fallback');
           return json(g, { headers: { 'X-Served-By': 'gemini' } });
         } catch (ge) {
-          console.error('[MNN] Gemini name fallback failed:', ge instanceof Error ? ge.message : String(ge));
-          return null;
+          console.error('[MNN] /analyze-name Gemini primary failed:', ge instanceof Error ? ge.message : String(ge));
         }
-      };
-
-      let res: Response;
-      try {
-        res = await fetch(OPENAI_API_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${env.OPENAI_API_KEY}`,
-          },
-          body: JSON.stringify(openaiReq),
-          signal: AbortSignal.timeout(OPENAI_FETCH_MS),
-        });
-      } catch (e) {
-        const g = await tryGeminiName();
-        if (g) return g;
-        const msg = e instanceof Error ? e.message : String(e);
-        return json({ error: 'openai fetch failed', model, detail: msg.slice(0, 200) }, { status: 502 });
       }
 
-      if (!res.ok) {
-        const text = await res.text();
-        const g = await tryGeminiName();
-        if (g) return g;
-        const isRateLimited = res.status === 429;
-        const retryAfterSec = isRateLimited
-          ? extractRetryAfterSeconds(res.headers.get('Retry-After'), text)
-          : null;
-        const headers: Record<string, string> = {};
-        if (retryAfterSec != null) headers['Retry-After'] = String(retryAfterSec);
+      try {
+        const oa = await callOpenAIChatJSON(env, openaiReq);
+        return json(oa, { headers: { 'X-Served-By': 'openai' } });
+      } catch (oaErr) {
+        const isQuota = oaErr instanceof OpenAIError && /insufficient_quota/i.test(oaErr.body);
+        const status = oaErr instanceof OpenAIError ? oaErr.status : 502;
+        const detail = oaErr instanceof Error ? oaErr.message : String(oaErr);
         return json(
-          { error: 'openai upstream error', status: res.status, model, retryAfterSec, detail: text.slice(0, 500) },
-          { status: isRateLimited ? 429 : 502, headers },
+          { error: 'all providers failed', model, detail: detail.slice(0, 400) },
+          { status: isQuota || status === 429 ? 429 : 502 },
         );
       }
-
-      const nameData = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string | null; refusal?: string | null } }>;
-      };
-      const nameChoice = nameData.choices?.[0]?.message;
-      if (nameChoice?.refusal) {
-        return json({ error: 'openai refusal', model, refusal: nameChoice.refusal.slice(0, 300) }, { status: 502 });
-      }
-      const nameText = nameChoice?.content;
-      if (!nameText) {
-        return json({ error: 'empty openai response', model }, { status: 502 });
-      }
-      let nameParsed: unknown;
-      try {
-        nameParsed = JSON.parse(nameText);
-      } catch {
-        return json({ error: 'unparseable openai response', model, raw: nameText.slice(0, 300) }, { status: 502 });
-      }
-      return json(nameParsed);
     }
 
     // POST /analyze
@@ -854,88 +862,51 @@ export default {
       },
     };
 
-    // Cross-provider failover: if OpenAI can't serve (out of credits, outage,
-    // rate limit), retry the same frames through Gemini. Returns a Response on
-    // success, or null so the caller falls through to the original OpenAI error.
+    // ── Provider routing: Gemini first, escalate hard clips to OpenAI ─────────
+    // 1. Gemini names every clip (cheap workhorse).
+    // 2. If Gemini is unsure (low confidence) or unavailable, OpenAI takes over.
+    // 3. If OpenAI then fails too, fall back to whatever Gemini produced.
     const geminiParts: GeminiPart[] = [
       {
         text: `${metaLine}\n${originalNameLine}\n${framesLine}\n\nAnalyze the clip, read any in-video cues carefully, use the original filename only when it matches the frames, and produce specific filename parts.`,
       },
       ...body.frames.map(b64 => ({ inline_data: { mime_type: 'image/jpeg', data: b64 } })),
     ];
-    const tryGemini = async (): Promise<Response | null> => {
-      if (!env.GEMINI_API_KEY) return null;
-      try {
-        const g = await callGeminiJSON(env, SYSTEM_INSTRUCTION, geminiParts);
-        console.log('[MNN] /analyze served by Gemini fallback');
-        return json(g, { headers: { 'X-Served-By': 'gemini' } });
-      } catch (ge) {
-        console.error('[MNN] Gemini fallback failed:', ge instanceof Error ? ge.message : String(ge));
-        return null;
-      }
-    };
 
-    let res: Response;
-    try {
-      res = await fetch(OPENAI_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${env.OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify(openaiReq),
-        signal: AbortSignal.timeout(OPENAI_FETCH_MS),
-      });
-    } catch (e) {
-      const g = await tryGemini();
-      if (g) return g;
-      const msg = e instanceof Error ? e.message : String(e);
-      return json({ error: 'openai fetch failed', model, detail: msg.slice(0, 200) }, { status: 502 });
+    let gem: unknown = null;
+    if (env.GEMINI_API_KEY) {
+      try {
+        gem = await callGeminiJSON(env, SYSTEM_INSTRUCTION, geminiParts);
+      } catch (ge) {
+        console.error('[MNN] /analyze Gemini primary failed:', ge instanceof Error ? ge.message : String(ge));
+      }
     }
 
-    if (!res.ok) {
-      const text = await res.text();
-      const g = await tryGemini();
-      if (g) return g;
-      const isRateLimited = res.status === 429;
-      const retryAfterSec = isRateLimited
-        ? extractRetryAfterSeconds(res.headers.get('Retry-After'), text)
-        : null;
-      const headers: Record<string, string> = {};
-      if (retryAfterSec != null) headers['Retry-After'] = String(retryAfterSec);
+    // "Hard" = Gemini unavailable, or it self-reported low confidence.
+    const hard = !gem || resultConfidence(gem) === 'low';
+    if (gem && !hard) {
+      return json(gem, { headers: { 'X-Served-By': 'gemini' } });
+    }
+
+    // Escalate to / fall back on OpenAI.
+    try {
+      const oa = await callOpenAIChatJSON(env, openaiReq);
+      console.log(`[MNN] /analyze served by OpenAI (${gem ? 'escalated-low-confidence' : 'gemini-unavailable'})`);
+      return json(oa, { headers: { 'X-Served-By': gem ? 'openai-escalated' : 'openai' } });
+    } catch (oaErr) {
+      // OpenAI failed. If Gemini gave us anything (even low confidence), use it.
+      if (gem) {
+        console.log('[MNN] /analyze OpenAI escalation failed — using Gemini low-confidence result');
+        return json(gem, { headers: { 'X-Served-By': 'gemini-lowconf' } });
+      }
+      // Both providers failed.
+      const isQuota = oaErr instanceof OpenAIError && /insufficient_quota/i.test(oaErr.body);
+      const status = oaErr instanceof OpenAIError ? oaErr.status : 502;
+      const detail = oaErr instanceof Error ? oaErr.message : String(oaErr);
       return json(
-        {
-          error: 'openai upstream error',
-          status: res.status,
-          model,
-          retryAfterSec,
-          detail: text.slice(0, 500),
-        },
-        { status: isRateLimited ? 429 : 502, headers },
+        { error: 'all providers failed', model, detail: detail.slice(0, 400) },
+        { status: isQuota || status === 429 ? 429 : 502 },
       );
     }
-
-    const data = (await res.json()) as {
-      choices?: Array<{
-        message?: { content?: string | null; refusal?: string | null };
-      }>;
-    };
-    const choice = data.choices?.[0]?.message;
-    if (choice?.refusal) {
-      return json({ error: 'openai refusal', model, refusal: choice.refusal.slice(0, 300) }, { status: 502 });
-    }
-    const text = choice?.content;
-    if (!text) {
-      return json({ error: 'empty openai response', model }, { status: 502 });
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      return json({ error: 'unparseable openai response', model, raw: text.slice(0, 300) }, { status: 502 });
-    }
-
-    return json(parsed);
   },
 };
