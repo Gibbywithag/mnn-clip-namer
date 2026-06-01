@@ -15,6 +15,10 @@ interface Env {
   OPENAI_API_KEY: string;
   SHARED_SECRET: string;
   BRAVE_API_KEY: string;
+  /** Resend API key — if set, errors are emailed to ERROR_EMAIL. Sign up free at resend.com. */
+  RESEND_API_KEY?: string;
+  /** Email address to receive error alerts, e.g. gilbranlaureano0417@gmail.com */
+  ERROR_EMAIL?: string;
 }
 
 interface AnalyzeBody {
@@ -254,6 +258,54 @@ export default {
     const isVerify = url.pathname === '/verify' && request.method === 'POST';
     const isAnalyzeName = url.pathname === '/analyze-name' && request.method === 'POST';
     const isWebSearch = url.pathname === '/websearch' && request.method === 'POST';
+
+    // POST /report-error — no auth required; fires from PWA error handlers
+    if (url.pathname === '/report-error' && request.method === 'POST') {
+      let body: { type?: string; message?: string; clipName?: string | null; userAgent?: string; timestamp?: string };
+      try { body = (await request.json()) as typeof body; }
+      catch { return json({ ok: false }, { status: 400 }); }
+
+      const type      = String(body.type    ?? 'unknown').slice(0, 50);
+      const message   = String(body.message ?? '').slice(0, 500);
+      const clipName  = body.clipName ? String(body.clipName).slice(0, 200) : null;
+      const userAgent = String(body.userAgent ?? '').slice(0, 200);
+      const timestamp = String(body.timestamp ?? new Date().toISOString());
+
+      // Always log — visible in Cloudflare Workers real-time logs and Workers Analytics
+      console.error(`[MNN Error] type=${type} clip=${clipName ?? 'N/A'} msg=${message} ua=${userAgent} t=${timestamp}`);
+
+      // Send email alert if Resend is configured
+      if (env.RESEND_API_KEY && env.ERROR_EMAIL) {
+        const subject = `[MNN Clip Namer] ${type}: ${message.slice(0, 60)}`;
+        const text = [
+          `Error type : ${type}`,
+          `Message    : ${message}`,
+          `Clip       : ${clipName ?? 'N/A'}`,
+          `Time       : ${timestamp}`,
+          `Browser    : ${userAgent}`,
+        ].join('\n');
+        try {
+          await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${env.RESEND_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              from: 'MNN Clip Namer <onboarding@resend.dev>',
+              to: [env.ERROR_EMAIL],
+              subject,
+              text,
+            }),
+            signal: AbortSignal.timeout(5_000),
+          });
+        } catch {
+          // Email failure should not block the response
+        }
+      }
+
+      return json({ ok: true });
+    }
 
     if (isWebSearch) {
       const wsSecret = request.headers.get('X-Shared-Secret');
