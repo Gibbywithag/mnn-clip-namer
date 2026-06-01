@@ -307,6 +307,98 @@ export default {
       return json({ ok: true });
     }
 
+    // POST /report-feedback — user-submitted bug report from the in-app Help page.
+    // No auth (the PWA can't safely hold a secret); blast radius is admin email.
+    if (url.pathname === '/report-feedback' && request.method === 'POST') {
+      interface FeedbackBody {
+        name?: string;
+        email?: string;
+        message?: string;
+        screenshot?: string | null; // data URL
+        diagnostics?: unknown;
+      }
+      let body: FeedbackBody;
+      try { body = (await request.json()) as FeedbackBody; }
+      catch { return json({ ok: false, error: 'invalid json' }, { status: 400 }); }
+
+      const message = String(body.message ?? '').trim();
+      if (message.length < 3) {
+        return json({ ok: false, error: 'message too short' }, { status: 400 });
+      }
+      const name  = String(body.name  ?? '').slice(0, 120);
+      const email = String(body.email ?? '').slice(0, 200);
+
+      // Build a readable diagnostics block.
+      let diagText = '';
+      try { diagText = JSON.stringify(body.diagnostics ?? {}, null, 2).slice(0, 8000); }
+      catch { diagText = '(unreadable diagnostics)'; }
+
+      console.error(`[MNN Feedback] from=${name || 'anon'} <${email || 'no-email'}> msg=${message.slice(0, 200)}`);
+
+      if (!env.RESEND_API_KEY || !env.ERROR_EMAIL) {
+        // Logged but not emailed — still a success from the user's perspective.
+        return json({ ok: true, emailed: false });
+      }
+
+      // Parse the screenshot data URL into a Resend attachment, if present.
+      const attachments: Array<{ filename: string; content: string }> = [];
+      if (typeof body.screenshot === 'string' && body.screenshot.startsWith('data:image/')) {
+        const comma = body.screenshot.indexOf(',');
+        if (comma > 0) {
+          const b64 = body.screenshot.slice(comma + 1);
+          // Cap attachment size (~6MB base64) to stay within email limits.
+          if (b64.length <= 6_000_000) {
+            const ext = body.screenshot.slice(11, body.screenshot.indexOf(';')) || 'png';
+            attachments.push({ filename: `screenshot.${ext === 'jpeg' ? 'jpg' : ext}`, content: b64 });
+          }
+        }
+      }
+
+      const subjectName = name || 'Someone';
+      const text = [
+        `New help report from the MNN Clip Namer app.`,
+        ``,
+        `From    : ${name || '(no name)'}`,
+        `Reply to: ${email || '(no email given)'}`,
+        ``,
+        `Message:`,
+        message,
+        ``,
+        `──────────── diagnostics ────────────`,
+        diagText,
+      ].join('\n');
+
+      try {
+        const res = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${env.RESEND_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: 'MNN Clip Namer <onboarding@resend.dev>',
+            to: [env.ERROR_EMAIL],
+            ...(email ? { reply_to: email } : {}),
+            subject: `[MNN Help] ${subjectName}: ${message.slice(0, 60)}`,
+            text,
+            ...(attachments.length ? { attachments } : {}),
+          }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '');
+          console.error(`[MNN Feedback] resend failed ${res.status}: ${detail.slice(0, 200)}`);
+          return json({ ok: false, error: 'email send failed' }, { status: 502 });
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[MNN Feedback] resend error: ${msg.slice(0, 200)}`);
+        return json({ ok: false, error: 'email send error' }, { status: 502 });
+      }
+
+      return json({ ok: true, emailed: true });
+    }
+
     if (isWebSearch) {
       const wsSecret = request.headers.get('X-Shared-Secret');
       if (!env.SHARED_SECRET || wsSecret !== env.SHARED_SECRET) {
