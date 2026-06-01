@@ -799,12 +799,13 @@ export default {
         const oa = await callOpenAIChatJSON(env, openaiReq);
         return json(oa, { headers: { 'X-Served-By': 'openai' } });
       } catch (oaErr) {
-        const isQuota = oaErr instanceof OpenAIError && /insufficient_quota/i.test(oaErr.body);
-        const status = oaErr instanceof OpenAIError ? oaErr.status : 502;
+        // Both providers failed. Gemini (paid primary) failing is almost always
+        // transient, so return a retryable 502 — the client will retry and
+        // recover — instead of a fail-fast quota error.
         const detail = oaErr instanceof Error ? oaErr.message : String(oaErr);
         return json(
-          { error: 'all providers failed', model, detail: detail.slice(0, 400) },
-          { status: isQuota || status === 429 ? 429 : 502 },
+          { error: 'all_providers_failed', model, detail: detail.slice(0, 400) },
+          { status: 502 },
         );
       }
     }
@@ -922,12 +923,13 @@ export default {
       console.log('[MNN] /analyze served by OpenAI (last-resort backup)');
       return json(oa, { headers: { 'X-Served-By': 'openai-lastresort' } });
     } catch (oaErr) {
-      const isQuota = oaErr instanceof OpenAIError && /insufficient_quota/i.test(oaErr.body);
-      const status = oaErr instanceof OpenAIError ? oaErr.status : 502;
+      // Both providers failed. Gemini (paid primary) failing is almost always
+      // transient, so return a retryable 502 — the client will retry and
+      // recover — instead of a fail-fast quota error.
       const detail = oaErr instanceof Error ? oaErr.message : String(oaErr);
       return json(
-        { error: 'all providers failed', model, detail: detail.slice(0, 400) },
-        { status: isQuota || status === 429 ? 429 : 502 },
+        { error: 'all_providers_failed', model, detail: detail.slice(0, 400) },
+        { status: 502 },
       );
     }
   },
