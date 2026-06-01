@@ -17,9 +17,18 @@ interface Env {
   BRAVE_API_KEY: string;
   /** Resend API key — if set, errors are emailed to ERROR_EMAIL. Sign up free at resend.com. */
   RESEND_API_KEY?: string;
-  /** Email address to receive error alerts, e.g. gilbranlaureano0417@gmail.com */
+  /** Recipient(s) for alerts. One address, or several separated by commas. */
   ERROR_EMAIL?: string;
+  /**
+   * Sender address. Defaults to Resend's shared onboarding@resend.dev, which can
+   * ONLY deliver to your own Resend account email. After verifying a domain at
+   * resend.com/domains, set this to an address on that domain (e.g.
+   * "MNN Alerts <alerts@yourdomain.com>") to deliver to any recipient.
+   */
+  MAIL_FROM?: string;
 }
+
+const DEFAULT_MAIL_FROM = 'MNN Clip Namer <onboarding@resend.dev>';
 
 interface AnalyzeBody {
   frames: string[]; // base64-encoded JPEGs
@@ -223,6 +232,20 @@ function json(body: unknown, init: ResponseInit = {}): Response {
 }
 
 /**
+ * ERROR_EMAIL may hold one address or several, separated by commas / semicolons
+ * / whitespace. Returns a de-duplicated list of recipient addresses.
+ * NOTE: Resend only delivers to arbitrary recipients once you've verified a
+ * sending domain. Until then it accepts ONLY your own account email; any other
+ * recipient makes the whole send fail.
+ */
+function parseRecipients(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return [...new Set(
+    raw.split(/[,;\s]+/).map(s => s.trim()).filter(s => s.includes('@')),
+  )];
+}
+
+/**
  * Parse Retry-After from the response. OpenAI's 429s include a `Retry-After`
  * header (in seconds), and may also embed "Please try again in 1.234s" in the
  * error body.
@@ -259,31 +282,54 @@ export default {
     const isAnalyzeName = url.pathname === '/analyze-name' && request.method === 'POST';
     const isWebSearch = url.pathname === '/websearch' && request.method === 'POST';
 
-    // POST /report-error — no auth required; fires from PWA error handlers
+    // POST /report-error — no auth required; fires from PWA error handlers.
+    // Accepts either a single error (legacy) or { errors: [...] } batch so a
+    // whole naming run sends ONE summary email instead of one per clip.
     if (url.pathname === '/report-error' && request.method === 'POST') {
-      let body: { type?: string; message?: string; clipName?: string | null; userAgent?: string; timestamp?: string };
-      try { body = (await request.json()) as typeof body; }
+      interface ErrItem { type?: string; message?: string; clipName?: string | null }
+      interface ErrBody extends ErrItem { errors?: ErrItem[]; userAgent?: string; timestamp?: string }
+      let body: ErrBody;
+      try { body = (await request.json()) as ErrBody; }
       catch { return json({ ok: false }, { status: 400 }); }
 
-      const type      = String(body.type    ?? 'unknown').slice(0, 50);
-      const message   = String(body.message ?? '').slice(0, 500);
-      const clipName  = body.clipName ? String(body.clipName).slice(0, 200) : null;
+      // Normalise to a list of errors (batch or single).
+      const rawList: ErrItem[] = Array.isArray(body.errors) && body.errors.length
+        ? body.errors
+        : [{ type: body.type, message: body.message, clipName: body.clipName }];
+
+      const items = rawList.slice(0, 100).map(e => ({
+        type:     String(e.type ?? 'unknown').slice(0, 50),
+        message:  String(e.message ?? '').slice(0, 500),
+        clipName: e.clipName ? String(e.clipName).slice(0, 200) : null,
+      }));
       const userAgent = String(body.userAgent ?? '').slice(0, 200);
       const timestamp = String(body.timestamp ?? new Date().toISOString());
 
-      // Always log — visible in Cloudflare Workers real-time logs and Workers Analytics
-      console.error(`[MNN Error] type=${type} clip=${clipName ?? 'N/A'} msg=${message} ua=${userAgent} t=${timestamp}`);
+      // Count by type for the summary line.
+      const counts: Record<string, number> = {};
+      for (const it of items) counts[it.type] = (counts[it.type] ?? 0) + 1;
+      const countSummary = Object.entries(counts).map(([t, n]) => `${n}×${t}`).join(', ');
 
-      // Send email alert if Resend is configured
-      if (env.RESEND_API_KEY && env.ERROR_EMAIL) {
-        const subject = `[MNN Clip Namer] ${type}: ${message.slice(0, 60)}`;
-        const text = [
-          `Error type : ${type}`,
-          `Message    : ${message}`,
-          `Clip       : ${clipName ?? 'N/A'}`,
-          `Time       : ${timestamp}`,
-          `Browser    : ${userAgent}`,
-        ].join('\n');
+      console.error(`[MNN Error] batch n=${items.length} (${countSummary}) ua=${userAgent} t=${timestamp}`);
+
+      const recipients = parseRecipients(env.ERROR_EMAIL);
+      if (env.RESEND_API_KEY && recipients.length) {
+        const n = items.length;
+        const subject = n === 1
+          ? `[MNN Clip Namer] ${items[0].type}: ${items[0].message.slice(0, 60)}`
+          : `[MNN Clip Namer] ${n} errors in last batch (${countSummary})`;
+
+        const lines = [
+          n === 1 ? `1 error reported.` : `${n} errors reported in one batch.`,
+          `Summary : ${countSummary}`,
+          `Time    : ${timestamp}`,
+          `Browser : ${userAgent}`,
+          ``,
+          `─────────── errors ───────────`,
+          ...items.map((it, i) =>
+            `${String(i + 1).padStart(2, ' ')}. [${it.type}] ${it.clipName ? it.clipName + ' — ' : ''}${it.message}`),
+        ];
+
         try {
           await fetch('https://api.resend.com/emails', {
             method: 'POST',
@@ -292,19 +338,19 @@ export default {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              from: 'MNN Clip Namer <onboarding@resend.dev>',
-              to: [env.ERROR_EMAIL],
+              from: env.MAIL_FROM || DEFAULT_MAIL_FROM,
+              to: recipients,
               subject,
-              text,
+              text: lines.join('\n'),
             }),
-            signal: AbortSignal.timeout(5_000),
+            signal: AbortSignal.timeout(8_000),
           });
         } catch {
           // Email failure should not block the response
         }
       }
 
-      return json({ ok: true });
+      return json({ ok: true, count: items.length });
     }
 
     // POST /report-feedback — user-submitted bug report from the in-app Help page.
@@ -335,7 +381,8 @@ export default {
 
       console.error(`[MNN Feedback] from=${name || 'anon'} <${email || 'no-email'}> msg=${message.slice(0, 200)}`);
 
-      if (!env.RESEND_API_KEY || !env.ERROR_EMAIL) {
+      const recipients = parseRecipients(env.ERROR_EMAIL);
+      if (!env.RESEND_API_KEY || !recipients.length) {
         // Logged but not emailed — still a success from the user's perspective.
         return json({ ok: true, emailed: false });
       }
@@ -376,8 +423,8 @@ export default {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            from: 'MNN Clip Namer <onboarding@resend.dev>',
-            to: [env.ERROR_EMAIL],
+            from: env.MAIL_FROM || DEFAULT_MAIL_FROM,
+            to: recipients,
             ...(email ? { reply_to: email } : {}),
             subject: `[MNN Help] ${subjectName}: ${message.slice(0, 60)}`,
             text,
