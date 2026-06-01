@@ -26,9 +26,18 @@ interface Env {
    * "MNN Alerts <alerts@yourdomain.com>") to deliver to any recipient.
    */
   MAIL_FROM?: string;
+  /**
+   * Google Gemini API key (free at aistudio.google.com/apikey). If set, the
+   * Worker automatically falls back to Gemini for clip naming whenever OpenAI
+   * fails (out of credits, outage, etc.) — true cross-provider redundancy.
+   */
+  GEMINI_API_KEY?: string;
+  /** Gemini model to use for fallback. Defaults to gemini-2.0-flash. */
+  GEMINI_MODEL?: string;
 }
 
 const DEFAULT_MAIL_FROM = 'MNN Clip Namer <onboarding@resend.dev>';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
 
 interface AnalyzeBody {
   frames: string[]; // base64-encoded JPEGs
@@ -215,6 +224,65 @@ const RESPONSE_SCHEMA = {
   },
   required: ['subject', 'technique', 'setting', 'confidence', 'notes', 'locationHint'],
 };
+
+// ─── Gemini fallback ───────────────────────────────────────────────────────────
+// Gemini's structured-output schema uses OpenAPI-style UPPERCASE type names and
+// does not accept additionalProperties.
+const GEMINI_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    subject:      { type: 'STRING' },
+    technique:    { type: 'STRING' },
+    setting:      { type: 'STRING' },
+    confidence:   { type: 'STRING', enum: ['high', 'medium', 'low'] },
+    notes:        { type: 'STRING' },
+    locationHint: { type: 'STRING' },
+  },
+  required: ['subject', 'technique', 'setting', 'confidence', 'notes', 'locationHint'],
+};
+
+type GeminiPart =
+  | { text: string }
+  | { inline_data: { mime_type: string; data: string } };
+
+/**
+ * Call Gemini with a system instruction + user parts (text and/or inline images)
+ * and return the parsed JSON object matching RESPONSE_SCHEMA. Throws on failure
+ * so the caller can fall through to the original OpenAI error.
+ */
+async function callGeminiJSON(env: Env, systemText: string, userParts: GeminiPart[]): Promise<unknown> {
+  const model = env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+  const endpoint =
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent` +
+    `?key=${env.GEMINI_API_KEY}`;
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: systemText }] },
+      contents: [{ role: 'user', parts: userParts }],
+      generationConfig: {
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+        responseSchema: GEMINI_SCHEMA,
+      },
+    }),
+    signal: AbortSignal.timeout(OPENAI_FETCH_MS),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`gemini ${res.status}: ${detail.slice(0, 200)}`);
+  }
+
+  const data = (await res.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const text = data.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+  if (!text.trim()) throw new Error('gemini returned empty response');
+  return JSON.parse(text);
+}
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -657,6 +725,20 @@ export default {
         },
       };
 
+      // Cross-provider failover for filename-only naming (text, no frames).
+      const nameUserText = `Original filename: ${body.originalName}\n${metaLine}\n\nGenerate filename parts from the filename and metadata only. No frames are available.`;
+      const tryGeminiName = async (): Promise<Response | null> => {
+        if (!env.GEMINI_API_KEY) return null;
+        try {
+          const g = await callGeminiJSON(env, FILENAME_SYSTEM_INSTRUCTION, [{ text: nameUserText }]);
+          console.log('[MNN] /analyze-name served by Gemini fallback');
+          return json(g, { headers: { 'X-Served-By': 'gemini' } });
+        } catch (ge) {
+          console.error('[MNN] Gemini name fallback failed:', ge instanceof Error ? ge.message : String(ge));
+          return null;
+        }
+      };
+
       let res: Response;
       try {
         res = await fetch(OPENAI_API_URL, {
@@ -669,12 +751,16 @@ export default {
           signal: AbortSignal.timeout(OPENAI_FETCH_MS),
         });
       } catch (e) {
+        const g = await tryGeminiName();
+        if (g) return g;
         const msg = e instanceof Error ? e.message : String(e);
         return json({ error: 'openai fetch failed', model, detail: msg.slice(0, 200) }, { status: 502 });
       }
 
       if (!res.ok) {
         const text = await res.text();
+        const g = await tryGeminiName();
+        if (g) return g;
         const isRateLimited = res.status === 429;
         const retryAfterSec = isRateLimited
           ? extractRetryAfterSeconds(res.headers.get('Retry-After'), text)
@@ -768,6 +854,27 @@ export default {
       },
     };
 
+    // Cross-provider failover: if OpenAI can't serve (out of credits, outage,
+    // rate limit), retry the same frames through Gemini. Returns a Response on
+    // success, or null so the caller falls through to the original OpenAI error.
+    const geminiParts: GeminiPart[] = [
+      {
+        text: `${metaLine}\n${originalNameLine}\n${framesLine}\n\nAnalyze the clip, read any in-video cues carefully, use the original filename only when it matches the frames, and produce specific filename parts.`,
+      },
+      ...body.frames.map(b64 => ({ inline_data: { mime_type: 'image/jpeg', data: b64 } })),
+    ];
+    const tryGemini = async (): Promise<Response | null> => {
+      if (!env.GEMINI_API_KEY) return null;
+      try {
+        const g = await callGeminiJSON(env, SYSTEM_INSTRUCTION, geminiParts);
+        console.log('[MNN] /analyze served by Gemini fallback');
+        return json(g, { headers: { 'X-Served-By': 'gemini' } });
+      } catch (ge) {
+        console.error('[MNN] Gemini fallback failed:', ge instanceof Error ? ge.message : String(ge));
+        return null;
+      }
+    };
+
     let res: Response;
     try {
       res = await fetch(OPENAI_API_URL, {
@@ -780,12 +887,16 @@ export default {
         signal: AbortSignal.timeout(OPENAI_FETCH_MS),
       });
     } catch (e) {
+      const g = await tryGemini();
+      if (g) return g;
       const msg = e instanceof Error ? e.message : String(e);
       return json({ error: 'openai fetch failed', model, detail: msg.slice(0, 200) }, { status: 502 });
     }
 
     if (!res.ok) {
       const text = await res.text();
+      const g = await tryGemini();
+      if (g) return g;
       const isRateLimited = res.status === 429;
       const retryAfterSec = isRateLimited
         ? extractRetryAfterSeconds(res.headers.get('Retry-After'), text)
