@@ -119,6 +119,13 @@ Rules for each field:
   If the original filename contains a meaningful event label that matches the frames, use it
   as a clue (e.g. "Ribbon Cutting Full.MOV" should become "ribbon-cutting-ceremony", not
   "group-photo-event").
+  OBJECT FOCUS: when the clip is mainly OF an object (no people, or the object is the point —
+  a vehicle, machine, instrument, product, building, food, sign, equipment), identify the
+  object SPECIFICALLY and put it in the subject. Use type + the most distinctive detail you can
+  read or recognize: make/model, brand, color, or function — e.g. "fire-truck-ladder",
+  "red-pickup-truck", "espresso-machine-pour", "sony-fx6-camera", "vintage-gibson-guitar",
+  "metro-bus-wrap", "construction-excavator". NEVER use bare generic words for an object
+  ("object", "item", "thing", "machine", "vehicle", "device") — always name the specific thing.
 - technique: 1 to 2 words, lowercase. One of: "wide-shot", "closeup", "medium-shot",
   "handheld", "tripod-locked", "tracking", "dolly", "drone-aerial", "timelapse", "slowmo",
   "interview", "podium-mounted", "bts" (behind-the-scenes), "broll", "static",
