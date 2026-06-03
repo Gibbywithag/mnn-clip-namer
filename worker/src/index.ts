@@ -127,28 +127,51 @@ Rules for each field:
   "metro-bus-wrap", "construction-excavator". NEVER use bare generic words for an object
   ("object", "item", "thing", "machine", "vehicle", "device") — always name the specific thing.
 
-  PUBLIC ART & SCULPTURE: when the clip shows a sculpture, mural, monument, statue, fountain,
-  or public installation, identify the SPECIFIC artwork by two steps: (1) read any plaque,
-  pedestal, base, or nearby signage for the title/artist/year (this is the STRONGEST evidence);
-  (2) only if there is no readable text, visually cross-reference against well-known public
-  artworks. When you DO recognize it confidently, use the artwork's official name in the subject
-  (e.g. "musica-statue", "athena-parthenos", "ghost-ballet-sculpture", "what-lifts-you-mural").
-  Nashville landmarks you may recognize (each has a VERY distinctive look — only match if it
-  clearly fits):
-    • Musica — 7 large bronze NUDE DANCING human figures, circular base, Music Row roundabout.
-    • Athena Parthenos — ~42 ft GILDED GODDESS statue inside the Parthenon, Centennial Park.
-    • Ghost Ballet — bright RED curving roller-coaster-like steel, east river bank.
-    • Infinite Regress — rust Corten-steel wave mesh, Music City Center plaza.
-    • What Lifts You — large monochrome ANGEL-WINGS mural, The Gulch.
-    • Andrew Jackson — bronze REARING HORSE with rider, Capitol grounds.
-    • Tennessee Suffragists Memorial — group of bronze FEMALE FIGURES, Centennial Park.
-  CRITICAL — DO NOT GUESS: never force one of these names onto a piece that doesn't clearly
-  match it. A wrong famous name is worse than an honest description. If you can't confidently
-  identify the specific artwork (no readable plaque AND it doesn't unmistakably match a known
-  work), DESCRIBE it by its actual distinctive features instead — e.g. "kinetic-gear-sculpture",
-  "red-steel-spiral", "abstract-circle-sculpture", "fountain-flags-plaza" — and set confidence
-  "low". Set confidence "high" ONLY when the title is confirmed by a readable plaque or the work
-  is unmistakable; "medium" for a strong visual match without text; "low" when describing.
+  PUBLIC ART & SCULPTURE (Nashville / Davidson County — Metro Arts collection, 230+ works):
+  When the clip shows a sculpture, mural, monument, statue, fountain, or installation, IDENTIFY
+  THE SPECIFIC ARTWORK. Evidence order: (1) any readable plaque/pedestal/base/sign with a
+  title/artist (strongest); (2) recognize it visually from the catalog below — these are often
+  shot in CLOSE-UP or PARTIAL, so identify from a CHARACTERISTIC FRAGMENT (a slice of red curving
+  tube by the river = Ghost Ballet; one colossal gilded hand indoors = Athena; a tall striped
+  pole = Stix); confirm with the environment (river, roundabout, courthouse lawn, Parthenon,
+  Capitol, park). Put the official name in the subject (e.g. "musica-statue", "ghost-ballet",
+  "witness-walls", "citizen-sculpture").
+
+  NASHVILLE PUBLIC ART CATALOG — distinctive look · where:
+    • Musica — cluster of larger-than-life BRONZE NUDE figures dancing/springing upward from a
+      circular base · Music Row Roundabout (16th/Division).
+    • Athena Parthenos — ~42 ft GILDED GOLD standing goddess holding a small winged figure in her
+      palm, helmet + shield · inside the Parthenon, Centennial Park.
+    • The Parthenon — full-size replica Greek temple, columns, tan stone · Centennial Park.
+    • Ghost Ballet for the East Bank Machineworks — bright RED industrial steel, big curving
+      roller-coaster-like arcs/loops · EAST bank of the Cumberland River, by old factory/silos.
+    • Light Meander — tall curving WAVE ribbon of mirror-finish stainless steel with color-
+      changing LED rods · West Riverfront Park, riverside.
+    • Stix — cluster of tall slender STRIPED POLES (~70 ft, like giant colored sticks/pencils) ·
+      Korean Veterans Blvd roundabout near Music City Center.
+    • Citizen — TWO ~30 ft tall abstract human FIGURES with outstretched arms, earthy concrete/
+      steel, crank at base · Public Square lawn at the Historic Metro Courthouse (3rd & Union).
+    • Witness Walls — low FRAGMENTED CONCRETE WALLS carved with civil-rights marchers/crowds ·
+      Public Square Park beside the courthouse.
+    • Infinite Regress — rust-orange CORTEN-STEEL wavy MESH/lattice screen · Music City Center plaza.
+    • What Lifts You — giant black-on-white hand-drawn ANGEL WINGS mural on brick (people pose
+      between them) · The Gulch, 11th Ave S.
+    • I Believe in Nashville — hand-painted mural: bold "I BELIEVE IN NASHVILLE" text with the TN
+      tri-star flag · 12 South & other walls.
+    • Andrew Jackson equestrian — bronze REARING HORSE with rider on a tall stone pedestal ·
+      Tennessee State Capitol grounds.
+    • Tennessee Woman Suffrage Memorial ("Perfect 36") — group of 5 BRONZE FEMALE FIGURES standing
+      together · Centennial Park near the Parthenon.
+    • Anchor in the Storm — Watermarks-series stone/metal piece marking the 2010 flood.
+  For works NOT in this list, use your broader knowledge of Nashville/Davidson public art and
+  Metro Arts (libraries, parks, transit shelters, community centers, bike racks like "Microphone").
+
+  CRITICAL — DO NOT GUESS A FAMOUS NAME: only claim a specific artwork when it CLEARLY matches
+  (plaque text, or an unmistakable visual fingerprint + matching location). A wrong famous name is
+  worse than an honest one. If unsure, DESCRIBE the piece by its real features instead — e.g.
+  "red-steel-spiral", "kinetic-gear-sculpture", "abstract-circle-sculpture". Confidence: "high"
+  only with a confirmed title or unmistakable match; "medium" for a strong visual match without
+  text; "low" when merely describing.
 - technique: 1 to 2 words, lowercase. One of: "wide-shot", "closeup", "medium-shot",
   "handheld", "tripod-locked", "tracking", "dolly", "drone-aerial", "timelapse", "slowmo",
   "interview", "podium-mounted", "bts" (behind-the-scenes), "broll", "static",
