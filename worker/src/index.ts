@@ -128,22 +128,27 @@ Rules for each field:
   ("object", "item", "thing", "machine", "vehicle", "device") — always name the specific thing.
 
   PUBLIC ART & SCULPTURE: when the clip shows a sculpture, mural, monument, statue, fountain,
-  or public installation, identify the SPECIFIC artwork by two steps: (1) visually cross-
-  reference what you see (form, material, color, scale, surroundings) against well-known public
-  artworks; (2) read any plaque, pedestal, base, or nearby signage for the title/artist/year.
-  Put the artwork's official name in the subject (e.g. "musica-statue", "athena-parthenos",
-  "infinite-regress-sculpture", "what-lifts-you-mural", "andrew-jackson-statue",
-  "tennessee-suffragists-memorial", "ghost-ballet-sculpture"). NEVER fall back to medium
-  descriptions ("bronze-sculpture", "abstract-statue", "metal-installation", "outdoor-art").
-  Nashville landmarks to recognize on sight:
-    • Musica — 7 large bronze nude dancing figures, circular base, Music Row roundabout.
-    • Athena Parthenos — ~42 ft gilded goddess inside the Parthenon, Centennial Park.
-    • Ghost Ballet for the East Bank Machineworks — red roller-coaster-like steel, riverfront.
+  or public installation, identify the SPECIFIC artwork by two steps: (1) read any plaque,
+  pedestal, base, or nearby signage for the title/artist/year (this is the STRONGEST evidence);
+  (2) only if there is no readable text, visually cross-reference against well-known public
+  artworks. When you DO recognize it confidently, use the artwork's official name in the subject
+  (e.g. "musica-statue", "athena-parthenos", "ghost-ballet-sculpture", "what-lifts-you-mural").
+  Nashville landmarks you may recognize (each has a VERY distinctive look — only match if it
+  clearly fits):
+    • Musica — 7 large bronze NUDE DANCING human figures, circular base, Music Row roundabout.
+    • Athena Parthenos — ~42 ft GILDED GODDESS statue inside the Parthenon, Centennial Park.
+    • Ghost Ballet — bright RED curving roller-coaster-like steel, east river bank.
     • Infinite Regress — rust Corten-steel wave mesh, Music City Center plaza.
-    • What Lifts You — large monochrome angel-wings mural, The Gulch.
-    • Andrew Jackson equestrian statue — rearing bronze horse, Capitol grounds.
-    • Tennessee Suffragists Memorial — bronze female figures, Centennial Park.
-  Set confidence "high" only if the title is confirmed (recognized or readable), else "medium".
+    • What Lifts You — large monochrome ANGEL-WINGS mural, The Gulch.
+    • Andrew Jackson — bronze REARING HORSE with rider, Capitol grounds.
+    • Tennessee Suffragists Memorial — group of bronze FEMALE FIGURES, Centennial Park.
+  CRITICAL — DO NOT GUESS: never force one of these names onto a piece that doesn't clearly
+  match it. A wrong famous name is worse than an honest description. If you can't confidently
+  identify the specific artwork (no readable plaque AND it doesn't unmistakably match a known
+  work), DESCRIBE it by its actual distinctive features instead — e.g. "kinetic-gear-sculpture",
+  "red-steel-spiral", "abstract-circle-sculpture", "fountain-flags-plaza" — and set confidence
+  "low". Set confidence "high" ONLY when the title is confirmed by a readable plaque or the work
+  is unmistakable; "medium" for a strong visual match without text; "low" when describing.
 - technique: 1 to 2 words, lowercase. One of: "wide-shot", "closeup", "medium-shot",
   "handheld", "tripod-locked", "tracking", "dolly", "drone-aerial", "timelapse", "slowmo",
   "interview", "podium-mounted", "bts" (behind-the-scenes), "broll", "static",
