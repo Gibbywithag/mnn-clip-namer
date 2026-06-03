@@ -126,6 +126,24 @@ Rules for each field:
   "red-pickup-truck", "espresso-machine-pour", "sony-fx6-camera", "vintage-gibson-guitar",
   "metro-bus-wrap", "construction-excavator". NEVER use bare generic words for an object
   ("object", "item", "thing", "machine", "vehicle", "device") — always name the specific thing.
+
+  PUBLIC ART & SCULPTURE: when the clip shows a sculpture, mural, monument, statue, fountain,
+  or public installation, identify the SPECIFIC artwork by two steps: (1) visually cross-
+  reference what you see (form, material, color, scale, surroundings) against well-known public
+  artworks; (2) read any plaque, pedestal, base, or nearby signage for the title/artist/year.
+  Put the artwork's official name in the subject (e.g. "musica-statue", "athena-parthenos",
+  "infinite-regress-sculpture", "what-lifts-you-mural", "andrew-jackson-statue",
+  "tennessee-suffragists-memorial", "ghost-ballet-sculpture"). NEVER fall back to medium
+  descriptions ("bronze-sculpture", "abstract-statue", "metal-installation", "outdoor-art").
+  Nashville landmarks to recognize on sight:
+    • Musica — 7 large bronze nude dancing figures, circular base, Music Row roundabout.
+    • Athena Parthenos — ~42 ft gilded goddess inside the Parthenon, Centennial Park.
+    • Ghost Ballet for the East Bank Machineworks — red roller-coaster-like steel, riverfront.
+    • Infinite Regress — rust Corten-steel wave mesh, Music City Center plaza.
+    • What Lifts You — large monochrome angel-wings mural, The Gulch.
+    • Andrew Jackson equestrian statue — rearing bronze horse, Capitol grounds.
+    • Tennessee Suffragists Memorial — bronze female figures, Centennial Park.
+  Set confidence "high" only if the title is confirmed (recognized or readable), else "medium".
 - technique: 1 to 2 words, lowercase. One of: "wide-shot", "closeup", "medium-shot",
   "handheld", "tripod-locked", "tracking", "dolly", "drone-aerial", "timelapse", "slowmo",
   "interview", "podium-mounted", "bts" (behind-the-scenes), "broll", "static",
@@ -142,7 +160,9 @@ Rules for each field:
   inferred some parts, "low" if mostly guessing.
 - notes: empty string unless the clip is ambiguous or you spotted an important cue the
   user might want to know (e.g. "used lower-third: budget hearing" or
-  "signage partially readable").
+  "signage partially readable"). For public art, record any readable identifying detail —
+  artwork title, artist, year, or medium (e.g. "Musica by Alan LeQuire, 2003, bronze" or
+  "plaque: Ghost Ballet, Alice Aycock") so it is preserved in the exported metadata.
 - locationHint: Write the most specific location identifier you can extract. Priority:
   (1) If you recognize a specific named place, use its official name (e.g. "Centennial
   Park", "Nissan Stadium", "Metro Nashville Courthouse", "Germantown", "Music Row").
