@@ -163,8 +163,18 @@ Rules for each field:
     • Tennessee Woman Suffrage Memorial ("Perfect 36") — group of 5 BRONZE FEMALE FIGURES standing
       together · Centennial Park near the Parthenon.
     • Anchor in the Storm — Watermarks-series stone/metal piece marking the 2010 flood.
-  For works NOT in this list, use your broader knowledge of Nashville/Davidson public art and
-  Metro Arts (libraries, parks, transit shelters, community centers, bike racks like "Microphone").
+    • Threshold ("the Cumberland Gear Ring") — large rusty steel GEAR/COG RING (from an old barge
+      steam-crane) set into the sidewalk · East Bank Greenway near Nissan Stadium, ACROSS the
+      river from downtown. A big circular gear by the river = Threshold.
+    • The Gathering — abstract sculpture · William Edmondson Park, Charlotte Ave.
+    • Road to the Mountaintop (Thornton Dial) — assemblage sculpture · William Edmondson Park.
+    • Aileron — forged-steel sculpture evoking an early biplane wing · McCabe Park (old airfield).
+    • The Founding of Nashville / Cumberland Compact — bronze relief of early settlers · riverfront.
+    • Functional "bike rack" art by local artists — e.g. Microphone (Music Row Roundabout), Banjo,
+      Corn and Tomato, Emerge — small painted steel racks shaped like the object they're named for.
+  For works NOT in this list, use your broader knowledge of Nashville/Davidson public art and the
+  Metro Arts collection (200+ works in libraries, parks, transit shelters, community centers,
+  courthouse/office walls, greenways) — name the specific piece when you recognize it or read it.
 
   CRITICAL — DO NOT GUESS A FAMOUS NAME: only claim a specific artwork when it CLEARLY matches
   (plaque text, or an unmistakable visual fingerprint + matching location). A wrong famous name is
