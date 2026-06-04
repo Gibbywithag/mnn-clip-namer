@@ -476,7 +476,7 @@ export default {
     // whole naming run sends ONE summary email instead of one per clip.
     if (url.pathname === '/report-error' && request.method === 'POST') {
       interface ErrItem { type?: string; message?: string; clipName?: string | null }
-      interface ErrBody extends ErrItem { errors?: ErrItem[]; userAgent?: string; timestamp?: string }
+      interface ErrBody extends ErrItem { errors?: ErrItem[]; userAgent?: string; timestamp?: string; crossOriginIsolated?: boolean; ffmpegMode?: string }
       let body: ErrBody;
       try { body = (await request.json()) as ErrBody; }
       catch { return json({ ok: false }, { status: 400 }); }
@@ -491,8 +491,10 @@ export default {
         message:  String(e.message ?? '').slice(0, 500),
         clipName: e.clipName ? String(e.clipName).slice(0, 200) : null,
       }));
-      const userAgent = String(body.userAgent ?? '').slice(0, 200);
-      const timestamp = String(body.timestamp ?? new Date().toISOString());
+      const userAgent  = String(body.userAgent ?? '').slice(0, 200);
+      const timestamp  = String(body.timestamp ?? new Date().toISOString());
+      const isolated   = body.crossOriginIsolated;
+      const ffmpegMode = body.ffmpegMode ? String(body.ffmpegMode) : null;
 
       // Count by type for the summary line.
       const counts: Record<string, number> = {};
@@ -508,11 +510,16 @@ export default {
           ? `[MNN Clip Namer] ${items[0].type}: ${items[0].message.slice(0, 60)}`
           : `[MNN Clip Namer] ${n} errors in last batch (${countSummary})`;
 
+        const perfLine = ffmpegMode
+          ? `ffmpeg  : ${ffmpegMode}${isolated === false ? '  ⚠ NOT cross-origin isolated — single-thread only' : ''}`
+          : null;
+
         const lines = [
           n === 1 ? `1 error reported.` : `${n} errors reported in one batch.`,
           `Summary : ${countSummary}`,
           `Time    : ${timestamp}`,
           `Browser : ${userAgent}`,
+          ...(perfLine ? [perfLine] : []),
           ``,
           `─────────── errors ───────────`,
           ...items.map((it, i) =>
